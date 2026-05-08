@@ -3,8 +3,6 @@ use qrcodegen::{QrCode, QrCodeEcc};
 
 use crate::cli;
 use crate::daemon::control::Request;
-use crate::host;
-use crate::ipc;
 use crate::protocol::PairPayload;
 
 #[derive(Args, Debug)]
@@ -15,15 +13,18 @@ pub struct PairArgs {
 }
 
 pub async fn run(args: PairArgs) -> anyhow::Result<()> {
+    // ensure_current_daemon() handles every state: no daemon, stale
+    // daemon, current daemon. After this call, a v<this binary> daemon
+    // is up on the IPC socket — and crucially, that daemon is the only
+    // path that has the iroh endpoint and can populate the `relay` field
+    // in the pair payload. We deliberately don't fall back to a
+    // daemon-less "build payload from disk" mode, because that mode can't
+    // emit a relay URL and the resulting QR is undialable on networks
+    // where pkarr/DNS publishing is broken.
     cli::ensure_current_daemon().await?;
-    let payload: PairPayload = if ipc::is_daemon_running().await {
-        let resp = cli::send(Request::Pair).await?;
-        cli::decode_data(resp)?
-    } else {
-        let cfg = crate::config::load_or_init().await?;
-        let secret_key = crate::state::load_or_create_secret_key().await?;
-        host::pair_payload(&secret_key, &cfg, None)
-    };
+
+    let resp = cli::send(Request::Pair).await?;
+    let payload: PairPayload = cli::decode_data(resp)?;
 
     let json = serde_json::to_string(&payload)?;
     println!("{json}");

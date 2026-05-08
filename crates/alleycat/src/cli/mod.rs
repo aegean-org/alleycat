@@ -59,38 +59,54 @@ pub fn require_ok(resp: &Response) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// If a daemon is running on a *different* binary version than this CLI,
-/// gracefully stop it and respawn `current_exe serve` as a detached child.
-/// No-op when the daemon isn't running, when versions match, or when we
-/// can't tell (older daemon that doesn't advertise `version`).
+/// Make sure a daemon of *this* binary's version is running and reachable
+/// on the IPC socket. Handles every state the user might be in:
 ///
-/// Called at the top of subcommands that mutate user-visible state (`pair`,
-/// `rotate`) so a freshly-installed CLI never silently talks to a stale
-/// daemon and produces stale output (e.g. a pair QR missing the relay URL).
+/// - no daemon at all              → spawn detached
+/// - daemon up, version matches    → no-op
+/// - daemon up, version mismatch   → gracefully restart onto current_exe
+/// - daemon up, version unknown    → assume stale, restart
+/// - autostart installed but wedged (launchd throttle, stale plist path) →
+///   fall through to manual spawn
+///
+/// Called at the top of subcommands that mutate user-visible state
+/// (`pair`, `rotate`) and at the top of the bare-invocation onboarding
+/// flow, so users never have to know whether a daemon is up, fresh, or
+/// stale — `npx kittylitter` Just Works regardless of prior state.
 pub async fn ensure_current_daemon() -> anyhow::Result<()> {
     if !ipc::is_daemon_running().await {
-        return Ok(());
+        // Nothing listening — nothing to compare versions against. Just
+        // start one. restart_daemon() handles the autostart-rewrite +
+        // detached-spawn dance.
+        return restart_daemon().await;
     }
-    let Ok(resp) = send(Request::Status).await else {
+
+    // Something is listening. Ask its version. If the IPC handshake fails
+    // (socket exists but daemon is wedged), treat it as stale and bounce.
+    let needs_restart = match send(Request::Status).await {
+        Ok(resp) => match decode_data::<StatusInfo>(resp) {
+            Ok(status) => {
+                let cli_version = crate::binary_version();
+                let daemon_version = status.version.as_deref().unwrap_or("<unknown>");
+                if daemon_version == cli_version {
+                    None
+                } else {
+                    Some(daemon_version.to_string())
+                }
+            }
+            Err(_) => Some("<unparseable>".to_string()),
+        },
+        Err(_) => Some("<unreachable>".to_string()),
+    };
+
+    let Some(stale) = needs_restart else {
         return Ok(());
     };
-    let Ok(status) = decode_data::<StatusInfo>(resp) else {
-        return Ok(());
-    };
-    let cli_version = crate::binary_version();
-    let daemon_version = match status.version.as_deref() {
-        Some(v) => v,
-        // Pre-`version` daemons can't tell us — assume mismatch and offer
-        // to bounce, since the only way the user invoked this code path is
-        // by running a newer CLI.
-        None => "<unknown>",
-    };
-    if daemon_version == cli_version {
-        return Ok(());
-    }
+
     eprintln!(
-        "note: daemon is v{daemon_version} but {cli} is v{cli_version}; restarting daemon onto v{cli_version}...",
-        cli = crate::binary_name()
+        "note: daemon is v{stale} but {cli} is v{cur}; restarting daemon onto v{cur}...",
+        cli = crate::binary_name(),
+        cur = crate::binary_version()
     );
     restart_daemon().await
 }

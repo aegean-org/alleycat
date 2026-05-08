@@ -1,20 +1,20 @@
-//! Default flow when the binary is invoked with no subcommand. Designed for
-//! `npx kittylitter` first-run UX:
+//! Default flow when the binary is invoked with no subcommand. Designed
+//! for `npx kittylitter` first-run UX:
 //!
-//! 1. Install the OS-level autostart entry if it's missing. On macOS/Linux
-//!    this also starts the daemon (launchctl bootstrap+kickstart / systemctl
-//!    --user start), so by the time `install()` returns the control socket
-//!    is up — or about to be.
-//! 2. Wait briefly for the control socket to accept connections.
-//! 3. Print the pair payload with a QR code so the user can pair their phone
-//!    immediately.
-
-use std::time::{Duration, Instant};
-
-use anyhow::anyhow;
+//! 1. Install the OS-level autostart entry if it's missing (so future
+//!    user logins bring the daemon up on their own). Errors here are
+//!    warnings only — we still bring the daemon up ourselves below.
+//! 2. Bring a daemon of *this* binary's version online via
+//!    `cli::ensure_current_daemon`, which handles every state the user
+//!    might be in: no daemon, stale daemon, supervisor wedged, plist
+//!    pointing at a moved binary, etc.
+//! 3. Print the pair payload with a QR code so the user can pair their
+//!    phone immediately.
+//!
+//! Goal: the entire sequence is one command (`npx kittylitter`) with no
+//! follow-up `serve`/`stop`/`install` rituals required.
 
 use crate::cli;
-use crate::ipc;
 use crate::service;
 
 pub async fn run() -> anyhow::Result<()> {
@@ -22,23 +22,19 @@ pub async fn run() -> anyhow::Result<()> {
 
     if !service::is_installed().unwrap_or(false) {
         println!("First run — installing {name} as a user-level autostart...");
-        service::install()?;
-        println!("installed.");
+        if let Err(error) = service::install() {
+            eprintln!(
+                "warning: installing autostart failed: {error:#}; continuing without it"
+            );
+        }
     }
 
-    // Autostart usually has the daemon listening within a few hundred ms.
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while Instant::now() < deadline {
-        if ipc::is_daemon_running().await {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-    if !ipc::is_daemon_running().await {
-        return Err(anyhow!(
-            "daemon did not come up within 10s. try `{name} status` for details."
-        ));
-    }
+    // ensure_current_daemon does whatever it takes to leave a
+    // v<this binary> daemon listening on the IPC socket: spawns one if
+    // none is up, restarts a stale one, falls back to a setsid-detached
+    // spawn if the supervisor is wedged. Same path `pair`/`rotate` use,
+    // so onboarding stays honest about runtime state.
+    cli::ensure_current_daemon().await?;
 
     cli::pair::run(cli::pair::PairArgs { qr: true }).await
 }
