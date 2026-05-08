@@ -97,6 +97,15 @@ pub async fn ensure_current_daemon() -> anyhow::Result<()> {
 
 /// Stop any running daemon and start a fresh one from `current_exe`.
 /// Public so the explicit `upgrade` subcommand can reuse the same path.
+///
+/// If an OS-level autostart supervisor is installed (launchd / systemd-user
+/// / Windows Startup `.lnk` / XDG `.desktop`), this also rewrites that
+/// entry so the supervisor stops pointing at a stale path. macOS launchd
+/// and Linux systemd-user re-kickstart the daemon on their own once the
+/// pointer is rewritten; Windows and XDG-fallback Linux don't, so we fall
+/// back to spawning ourselves. The single-instance file lock in
+/// `daemon::run` is the safety net against accidentally spawning two
+/// daemons if a supervisor races us.
 pub async fn restart_daemon() -> anyhow::Result<()> {
     if ipc::is_daemon_running().await {
         let _ = send(Request::Stop).await;
@@ -106,12 +115,37 @@ pub async fn restart_daemon() -> anyhow::Result<()> {
         .await
         .context("old daemon did not exit within 10s")?;
     }
-    spawn_serve_detached().context("spawning new daemon")?;
-    wait_until(Duration::from_secs(15), || async {
+
+    let supervisor = crate::service::is_installed().unwrap_or(false);
+    if supervisor {
+        // Re-bind the supervisor entry to current_exe. Best-effort: if the
+        // user's launchd/systemd state is wedged we still want to spawn the
+        // new daemon ourselves below, not bail.
+        if let Err(error) = crate::service::install() {
+            eprintln!(
+                "warning: re-installing autostart entry failed: {error:#}; falling back to manual respawn"
+            );
+        }
+    }
+
+    // Give a launchd/systemd supervisor a moment to bring the daemon back
+    // up via the rewritten unit. macOS kickstart usually wins inside ~1s;
+    // systemd-user is similar. We poll a few seconds before falling back.
+    let supervisor_started = wait_until(Duration::from_secs(5), || async {
         ipc::is_daemon_running().await
     })
     .await
-    .context("new daemon did not come up within 15s")?;
+    .is_ok();
+
+    if !supervisor_started {
+        spawn_serve_detached().context("spawning new daemon")?;
+        wait_until(Duration::from_secs(15), || async {
+            ipc::is_daemon_running().await
+        })
+        .await
+        .context("new daemon did not come up within 15s")?;
+    }
+
     Ok(())
 }
 
