@@ -1,5 +1,5 @@
 //! systemd user-unit install for Linux, with XDG-autostart `.desktop`
-//! fallback when `systemctl --user` is unavailable.
+//! fallback when the systemd user manager is not reachable.
 
 use std::path::Path;
 use std::process::Command;
@@ -13,7 +13,7 @@ pub(super) fn install() -> anyhow::Result<()> {
     let exe = std::env::current_exe().context("resolving current executable")?;
     let inherit_path = std::env::var("PATH").ok();
 
-    if has_systemd_user() {
+    if systemd_user_session_available() {
         let unit_path = paths::systemd_unit_path()?;
         let unit_name = systemd_unit_name(&unit_path)?;
         write_systemd_unit(&unit_path, &exe, inherit_path.as_deref())?;
@@ -38,14 +38,14 @@ pub(super) fn install() -> anyhow::Result<()> {
     }
 
     Err(anyhow!(
-        "Linux init not supported (no `systemctl --user`, no XDG graphical session). \
+        "Linux init not supported (no reachable `systemd --user` session, no XDG graphical session). \
          Run `alleycat serve` manually under your init."
     ))
 }
 
 pub(super) fn uninstall() -> anyhow::Result<()> {
     let unit_path = paths::systemd_unit_path()?;
-    if has_systemd_user() {
+    if systemd_user_session_available() {
         if let Ok(unit_name) = systemd_unit_name(&unit_path) {
             let _ = run_systemctl(&["--user", "disable", "--now", &unit_name]);
         }
@@ -59,7 +59,7 @@ pub(super) fn uninstall() -> anyhow::Result<()> {
         std::fs::remove_file(&desktop_path)
             .with_context(|| format!("removing {}", desktop_path.display()))?;
     }
-    if has_systemd_user() {
+    if systemd_user_session_available() {
         let _ = run_systemctl(&["--user", "daemon-reload"]);
     }
     Ok(())
@@ -67,9 +67,12 @@ pub(super) fn uninstall() -> anyhow::Result<()> {
 
 pub(super) fn is_installed() -> anyhow::Result<bool> {
     let unit_path = paths::systemd_unit_path()?;
-    if unit_path.exists() && has_systemd_user() {
-        let unit_name = systemd_unit_name(&unit_path)?;
-        return Ok(systemd_unit_is_enabled(&unit_name));
+    if unit_path.exists() {
+        if systemd_user_session_available() {
+            let unit_name = systemd_unit_name(&unit_path)?;
+            return Ok(systemd_unit_is_enabled(&unit_name));
+        }
+        return Ok(true);
     }
     Ok(paths::xdg_autostart_path()?.exists())
 }
@@ -144,9 +147,9 @@ fn render_autostart_desktop(exe: &Path) -> String {
     )
 }
 
-fn has_systemd_user() -> bool {
+fn systemd_user_session_available() -> bool {
     Command::new("systemctl")
-        .args(["--user", "--version"])
+        .args(["--user", "show-environment"])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
@@ -195,7 +198,9 @@ fn run_systemctl(args: &[&str]) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TempHome;
     use std::path::PathBuf;
+    use std::os::unix::fs::PermissionsExt;
 
     fn tempdir() -> PathBuf {
         let mut path = std::env::temp_dir();
@@ -206,6 +211,32 @@ mod tests {
         path.push(format!("alleycat-svc-linux-{}-{stamp}", std::process::id()));
         std::fs::create_dir_all(&path).expect("temp dir");
         path
+    }
+
+    fn write_fake_systemctl(dir: &Path, log: &Path) -> PathBuf {
+        let script = dir.join("systemctl");
+        let body = format!(
+            "#!/bin/sh\n\
+             printf '%s\\n' \"$*\" >> \"{}\"\n\
+             case \"$*\" in\n\
+               \"--user show-environment\")\n\
+                 exit 1\n\
+                 ;;\n\
+               \"--user --version\")\n\
+                 printf 'systemd 999\\n'\n\
+                 exit 0\n\
+                 ;;\n\
+               *)\n\
+                 exit 0\n\
+                 ;;\n\
+             esac\n",
+            log.display()
+        );
+        std::fs::write(&script, body).expect("write fake systemctl");
+        let mut perms = std::fs::metadata(&script).expect("fake systemctl metadata").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).expect("make fake systemctl executable");
+        script
     }
 
     #[test]
@@ -263,5 +294,64 @@ mod tests {
             systemd_unit_name(&unit).expect("unit name"),
             "kittylitter.service"
         );
+    }
+
+    #[test]
+    fn install_rejects_headless_sessions_without_touching_systemd() {
+        let mut env = TempHome::new();
+        let tmp = tempdir();
+        let log = tmp.join("systemctl.log");
+        let fake_bin = tmp.join("bin");
+        std::fs::create_dir_all(&fake_bin).expect("fake bin dir");
+        let _systemctl = write_fake_systemctl(&fake_bin, &log);
+
+        let path = std::env::join_paths([fake_bin.as_os_str()]).expect("join PATH");
+        env.override_env(&[
+            ("PATH", path.to_str().expect("PATH utf-8")),
+            ("XDG_CURRENT_DESKTOP", ""),
+            ("XDG_SESSION_TYPE", ""),
+        ]);
+
+        let err = install().expect_err("headless install should fail cleanly");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Linux init not supported"),
+            "unexpected error: {msg}"
+        );
+
+        let log_body = std::fs::read_to_string(&log).expect("read fake systemctl log");
+        assert!(
+            log_body.contains("--user show-environment"),
+            "probe should check for a reachable user bus"
+        );
+        assert!(
+            !log_body.contains("daemon-reload"),
+            "install must not try to reload user units when the bus is unavailable"
+        );
+    }
+
+    #[test]
+    fn is_installed_treats_existing_systemd_unit_as_installed_without_bus() {
+        let mut home = TempHome::new();
+        let tmp = tempdir();
+        let log = tmp.join("systemctl.log");
+        let fake_bin = tmp.join("bin");
+        std::fs::create_dir_all(&fake_bin).expect("fake bin dir");
+        let _systemctl = write_fake_systemctl(&fake_bin, &log);
+
+        let path = std::env::join_paths([fake_bin.as_os_str()]).expect("join PATH");
+        home.override_env(&[
+            ("PATH", path.to_str().expect("PATH utf-8")),
+            ("XDG_CURRENT_DESKTOP", ""),
+            ("XDG_SESSION_TYPE", ""),
+        ]);
+
+        let unit_path = paths::systemd_unit_path().expect("systemd unit path");
+        if let Some(parent) = unit_path.parent() {
+            std::fs::create_dir_all(parent).expect("create unit parent");
+        }
+        std::fs::write(&unit_path, b"[Unit]\nDescription=Alleycat\n").expect("write unit");
+
+        assert!(is_installed().expect("check installed"), "unit on disk should count as installed");
     }
 }

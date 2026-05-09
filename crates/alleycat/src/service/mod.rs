@@ -3,7 +3,7 @@
 //! All three platforms are first-class and **never require admin**:
 //! - macOS: launchd user agent (`~/Library/LaunchAgents/dev.alleycat.alleycat.plist`).
 //! - Linux: systemd user unit, with `~/.config/autostart/alleycat.desktop`
-//!   as a fallback for desktops without `systemctl --user`.
+//!   as a fallback for desktops without a reachable systemd user manager.
 //! - Windows: `.lnk` in the per-user Startup folder, written by the `mslnk`
 //!   crate (no COM, no admin).
 
