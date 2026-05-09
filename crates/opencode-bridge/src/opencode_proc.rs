@@ -1,9 +1,11 @@
 use std::net::TcpListener;
+use std::path::PathBuf;
+use std::process::Command as StdCommand;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use rand::RngCore;
-use tokio::process::{Child, Command};
+use tokio::process::{Child, Command as TokioCommand};
 
 pub struct OpencodeRuntime {
     pub base_url: String,
@@ -30,7 +32,7 @@ impl OpencodeRuntime {
             });
         }
 
-        let bin = std::env::var("OPENCODE_BRIDGE_BIN").unwrap_or_else(|_| "opencode".to_string());
+        let bin = resolve_opencode_bin();
         let port = match std::env::var("OPENCODE_BRIDGE_PORT").as_deref() {
             Ok("auto") | Err(_) => pick_port()?,
             Ok(value) => value.parse::<u16>()?,
@@ -54,7 +56,7 @@ impl OpencodeRuntime {
             })
             .unwrap_or_else(|| vec!["serve".to_string()]);
 
-        let mut command = Command::new(bin);
+        let mut command = TokioCommand::new(bin);
         command
             .args(extra_args)
             .arg(format!("--port={port}"))
@@ -106,6 +108,51 @@ async fn wait_until_healthy(base_url: &str, timeout: Duration) -> anyhow::Result
 fn pick_port() -> anyhow::Result<u16> {
     let listener = TcpListener::bind(("127.0.0.1", 0))?;
     Ok(listener.local_addr()?.port())
+}
+
+fn resolve_opencode_bin() -> String {
+    match std::env::var("OPENCODE_BRIDGE_BIN") {
+        Ok(raw) => {
+            let bin = raw.trim();
+            if !bin.is_empty() && bin != "opencode" {
+                return bin.to_string();
+            }
+        }
+        Err(_) => {}
+    }
+
+    if command_looks_usable("opencode") {
+        return "opencode".to_string();
+    }
+
+    for candidate in fallback_opencode_bins() {
+        if command_looks_usable(&candidate) {
+            return candidate.to_string_lossy().to_string();
+        }
+    }
+
+    "opencode".to_string()
+}
+
+fn fallback_opencode_bins() -> Vec<PathBuf> {
+    let mut bins = Vec::new();
+    if let Some(home) = std::env::var_os("HOME") {
+        bins.push(PathBuf::from(home).join(".opencode/bin/opencode"));
+    }
+    bins.push(PathBuf::from("/opt/homebrew/bin/opencode"));
+    bins.push(PathBuf::from("/usr/local/bin/opencode"));
+    bins
+}
+
+fn command_looks_usable(bin: impl AsRef<std::ffi::OsStr>) -> bool {
+    StdCommand::new(bin)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
 #[allow(dead_code)]

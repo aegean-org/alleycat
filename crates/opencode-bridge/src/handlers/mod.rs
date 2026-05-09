@@ -731,8 +731,16 @@ impl OpencodeBridge {
     }
 
     async fn handle_model_list(&self) -> Result<Value, JsonRpcError> {
-        let providers = self.client.get("/provider").await.unwrap_or(json!({}));
-        let mut models = flatten_models(providers);
+        let configured = self
+            .client
+            .get("/config/providers")
+            .await
+            .unwrap_or(json!({}));
+        let mut models = flatten_models(configured);
+        if models.is_empty() {
+            let providers = self.client.get("/provider").await.unwrap_or(json!({}));
+            models = flatten_models(providers);
+        }
         if models.is_empty() {
             models.push(default_model_entry("opencode", "opencode", "OpenCode"));
         }
@@ -808,7 +816,7 @@ impl Bridge for OpencodeBridge {
             | "feedback/upload" => Ok(json!({})),
             "experimentalFeature/list" => Ok(json!({"data":[],"nextCursor":null})),
             "collaborationMode/list" => Ok(json!({"data":[]})),
-            "thread/loaded/list" => Ok(json!({"threadIds":[]})),
+            "thread/loaded/list" => Ok(json!({"data":[],"nextCursor":null})),
             "thread/backgroundTerminals/clean" => Ok(json!({})),
             "thread/compact/start" => self.handle_thread_compact_start(params).await,
             "thread/rollback" => self.handle_thread_rollback(params).await,
@@ -1129,45 +1137,142 @@ fn split_model(model: &str) -> (&str, &str) {
 }
 
 fn flatten_models(providers: Value) -> Vec<Value> {
-    providers
-        .get("all")
+    let defaults = provider_defaults(&providers);
+    let provider_list = providers
+        .get("providers")
+        .or_else(|| providers.get("all"))
         .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut models: Vec<Value> = provider_list
         .into_iter()
-        .flatten()
         .flat_map(|provider| {
-            let provider_id = provider.get("id").and_then(Value::as_str).unwrap_or("opencode");
-            provider
-                .get("models")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default()
+            let provider_id = provider
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("opencode")
+                .to_string();
+            let defaults = defaults.clone();
+            models_for_provider(provider)
                 .into_iter()
-                .map(move |model| {
-                    let model_id = model.get("id").and_then(Value::as_str).unwrap_or("model");
-                    json!({
-                        "id": format!("{provider_id}/{model_id}"),
-                        "model": model_id,
-                        "displayName": model.get("name").and_then(Value::as_str).unwrap_or(model_id),
-                        "description": "",
-                        "hidden": false,
-                        "supportedReasoningEfforts": [{
-                            "reasoningEffort": "medium",
-                            "description": ""
-                        }],
-                        "defaultReasoningEffort": "medium",
-                        "inputModalities": ["text"],
-                        "supportsPersonality": false,
-                        "additionalSpeedTiers": [],
-                        "serviceTiers": [{
-                            "id": "standard",
-                            "name": "Standard",
-                            "description": "Default bridge service tier"
-                        }],
-                        "isDefault": false
-                    })
+                .map(move |(model_id, model)| {
+                    let is_default = defaults
+                        .iter()
+                        .any(|(p, m)| p == &provider_id && m == &model_id);
+                    model_entry(&provider_id, &model_id, &model, is_default)
                 })
         })
+        .collect();
+    if !models.is_empty()
+        && !models
+            .iter()
+            .any(|model| model.get("isDefault").and_then(Value::as_bool) == Some(true))
+        && let Some(first) = models.first_mut()
+    {
+        first["isDefault"] = json!(true);
+    }
+    models
+}
+
+fn provider_defaults(providers: &Value) -> Vec<(String, String)> {
+    providers
+        .get("default")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|map| {
+            map.iter().filter_map(|(provider_id, model_id)| {
+                model_id
+                    .as_str()
+                    .map(|model_id| (provider_id.clone(), model_id.to_string()))
+            })
+        })
         .collect()
+}
+
+fn models_for_provider(provider: Value) -> Vec<(String, Value)> {
+    match provider.get("models") {
+        Some(Value::Array(models)) => models
+            .iter()
+            .cloned()
+            .map(|model| {
+                let id = model
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("model")
+                    .to_string();
+                (id, model)
+            })
+            .collect(),
+        Some(Value::Object(models)) => models
+            .iter()
+            .map(|(key, model)| {
+                let id = model
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or(key)
+                    .to_string();
+                (id, model.clone())
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn model_entry(provider_id: &str, model_id: &str, model: &Value, is_default: bool) -> Value {
+    json!({
+        "id": format!("{provider_id}/{model_id}"),
+        "model": model_id,
+        "displayName": model.get("name").and_then(Value::as_str).unwrap_or(model_id),
+        "description": model.get("description").and_then(Value::as_str).unwrap_or(""),
+        "hidden": false,
+        "supportedReasoningEfforts": reasoning_efforts_for_model(model),
+        "defaultReasoningEffort": "medium",
+        "inputModalities": input_modalities_for_model(model),
+        "supportsPersonality": false,
+        "additionalSpeedTiers": [],
+        "serviceTiers": [{
+            "id": "standard",
+            "name": "Standard",
+            "description": "Default bridge service tier"
+        }],
+        "isDefault": is_default
+    })
+}
+
+fn reasoning_efforts_for_model(model: &Value) -> Value {
+    let supports_reasoning = model
+        .pointer("/capabilities/reasoning")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let efforts = if supports_reasoning {
+        vec!["minimal", "low", "medium", "high"]
+    } else {
+        vec!["medium"]
+    };
+    json!(
+        efforts
+            .into_iter()
+            .map(|reasoning_effort| json!({
+                "reasoningEffort": reasoning_effort,
+                "description": ""
+            }))
+            .collect::<Vec<_>>()
+    )
+}
+
+fn input_modalities_for_model(model: &Value) -> Value {
+    let input = model
+        .pointer("/capabilities/input")
+        .and_then(Value::as_object);
+    let mut modalities = vec![json!("text")];
+    if input
+        .and_then(|input| input.get("image"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        modalities.push(json!("image"));
+    }
+    Value::Array(modalities)
 }
 
 fn default_model_entry(provider_id: &str, model_id: &str, display_name: &str) -> Value {
