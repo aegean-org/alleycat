@@ -230,16 +230,16 @@ impl<H: PoolMember + 'static> ProcessPool<H> {
     /// 3. None — caller should spawn a fresh handle.
     pub async fn try_reuse_for_utility(&self, cwd: Option<&Path>) -> Option<Arc<H>> {
         let inner = self.inner.lock().await;
-        if let Some(target) = cwd {
-            if let Some(handle) = inner
+        let cwd_handle = cwd.and_then(|target| {
+            inner
                 .by_cwd
                 .get(target)
                 .and_then(|set| set.iter().next())
                 .and_then(|id| inner.processes.get(id))
                 .map(|e| e.handle.clone())
-            {
-                return Some(handle);
-            }
+        });
+        if let Some(handle) = cwd_handle {
+            return Some(handle);
         }
         inner
             .processes

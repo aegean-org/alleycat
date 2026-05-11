@@ -488,25 +488,29 @@ pub trait Hydrator<M>: Send + Sync {
 }
 
 fn matches_filter<M>(entry: &IndexEntry<M>, filter: &ListFilter) -> bool {
-    if let Some(want) = filter.archived {
-        if entry.archived != want {
-            return false;
-        }
+    if filter.archived.is_some_and(|want| entry.archived != want) {
+        return false;
     }
-    if let Some(cwds) = &filter.cwds {
-        if !cwds.iter().any(|c| c == &entry.cwd) {
-            return false;
-        }
+    if filter
+        .cwds
+        .as_ref()
+        .is_some_and(|cwds| !cwds.iter().any(|c| c == &entry.cwd))
+    {
+        return false;
     }
-    if let Some(providers) = &filter.model_providers {
-        if !providers.iter().any(|p| p == &entry.model_provider) {
-            return false;
-        }
+    if filter
+        .model_providers
+        .as_ref()
+        .is_some_and(|providers| !providers.iter().any(|p| p == &entry.model_provider))
+    {
+        return false;
     }
-    if let Some(sources) = &filter.source_kinds {
-        if !sources.iter().any(|s| *s == entry.source) {
-            return false;
-        }
+    if filter
+        .source_kinds
+        .as_ref()
+        .is_some_and(|sources| !sources.contains(&entry.source))
+    {
+        return false;
     }
     if let Some(term) = filter.search_term.as_deref().filter(|t| !t.is_empty()) {
         let needle = term.to_lowercase();

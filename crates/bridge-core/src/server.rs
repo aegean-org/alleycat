@@ -281,10 +281,9 @@ where
             return;
         }
     }
-    if let Some(payload) = replay_redelivery {
-        if write_json_line(&mut writer, &payload).await.is_err() {
-            return;
-        }
+    match replay_redelivery {
+        Some(payload) if write_json_line(&mut writer, &payload).await.is_err() => return,
+        _ => {}
     }
     while let Some(sequenced) = live_rx.recv().await {
         session.note_drainer_attempt(sequenced.seq);

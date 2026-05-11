@@ -64,24 +64,19 @@ pub enum ApprovalsReviewer {
 
 /// `SessionSource` mirror. Wire is camelCase except `vscode` which is the
 /// rename target codex uses.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum SessionSource {
     Cli,
     #[serde(rename = "vscode")]
     VsCode,
     Exec,
+    #[default]
     AppServer,
     Custom(String),
     SubAgent(Value),
     #[serde(other)]
     Unknown,
-}
-
-impl Default for SessionSource {
-    fn default() -> Self {
-        SessionSource::AppServer
-    }
 }
 
 /// Git metadata captured per-thread.
@@ -99,10 +94,11 @@ pub struct GitInfo {
 /// `ThreadStatus` is a tagged enum on `type`. The `active` variant carries
 /// flags. We keep it minimal — the bridge mostly reports `idle` / `active` /
 /// `notLoaded` and pi has no equivalent of system_error.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ThreadStatus {
     NotLoaded,
+    #[default]
     Idle,
     SystemError,
     #[serde(rename_all = "camelCase")]
@@ -110,12 +106,6 @@ pub enum ThreadStatus {
         #[serde(default)]
         active_flags: Vec<ThreadActiveFlag>,
     },
-}
-
-impl Default for ThreadStatus {
-    fn default() -> Self {
-        ThreadStatus::Idle
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
