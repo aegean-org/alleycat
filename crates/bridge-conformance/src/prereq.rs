@@ -12,6 +12,7 @@ use crate::TargetId;
 pub enum Prereq {
     Codex { bin: PathBuf },
     Pi { bin: PathBuf },
+    Amp { bin: PathBuf },
     Claude { bin: PathBuf },
     Opencode { bin: PathBuf },
     Droid { bin: PathBuf },
@@ -34,6 +35,7 @@ pub async fn check(target: TargetId) -> Result<Prereq, SkipReason> {
     match target {
         TargetId::Codex => check_codex(),
         TargetId::Pi => check_pi(),
+        TargetId::Amp => check_amp(),
         TargetId::Claude => check_claude(),
         TargetId::Opencode => check_opencode(),
         TargetId::Droid => check_droid(),
@@ -52,6 +54,18 @@ fn check_pi() -> Result<Prereq, SkipReason> {
     let bin = which_or_env("PI_BRIDGE_PI_BIN", "pi-coding-agent")
         .ok_or_else(|| SkipReason::Reason("pi-coding-agent not on PATH".into()))?;
     Ok(Prereq::Pi { bin })
+}
+
+fn check_amp() -> Result<Prereq, SkipReason> {
+    let bin = which_or_env("AMP_BRIDGE_AMP_BIN", "amp")
+        .ok_or_else(|| SkipReason::Reason("amp not on PATH".into()))?;
+    if has_amp_auth() {
+        Ok(Prereq::Amp { bin })
+    } else {
+        Err(SkipReason::Reason(
+            "amp auth unavailable: set AMP_API_KEY or run amp login".into(),
+        ))
+    }
 }
 
 fn check_claude() -> Result<Prereq, SkipReason> {
@@ -100,4 +114,14 @@ fn has_factory_auth() -> bool {
     PathBuf::from(home)
         .join(".factory/auth.encrypted")
         .is_file()
+}
+
+fn has_amp_auth() -> bool {
+    if env::var_os("AMP_API_KEY").is_some() {
+        return true;
+    }
+    let Some(home) = env::var_os("HOME") else {
+        return false;
+    };
+    PathBuf::from(home).join(".amp/oauth").is_dir()
 }

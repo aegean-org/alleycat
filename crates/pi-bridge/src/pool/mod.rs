@@ -125,7 +125,8 @@ impl PiPool {
         thread_id: ThreadId,
         cwd: impl AsRef<Path>,
     ) -> Result<Arc<PiProcessHandle>, PoolError> {
-        self.spawn_with_capacity_check(thread_id, cwd.as_ref()).await
+        self.spawn_with_capacity_check(thread_id, cwd.as_ref())
+            .await
     }
 
     /// Borrow a pi process for a one-shot, connection-scoped query

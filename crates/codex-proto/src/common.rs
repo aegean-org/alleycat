@@ -16,6 +16,7 @@ pub enum ReasoningEffort {
     Medium,
     High,
     XHigh,
+    Max,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]

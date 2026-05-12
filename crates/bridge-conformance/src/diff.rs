@@ -313,6 +313,15 @@ impl KnownDivergence {
                 skipped_notifications: SHAPE_DIVERGENT_NOTIFICATIONS,
                 field_path_divergences: COMMON_FIELD_DIVERGENCES,
             },
+            TargetId::Amp => Self {
+                target,
+                skipped_methods: concat_static(
+                    &["thread/fork", "thread/rollback", "review/start"],
+                    SHAPE_DIVERGENT_RESPONSES,
+                ),
+                skipped_notifications: SHAPE_DIVERGENT_NOTIFICATIONS,
+                field_path_divergences: COMMON_FIELD_DIVERGENCES,
+            },
             TargetId::Opencode => Self {
                 target,
                 skipped_methods: concat_static(

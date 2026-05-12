@@ -4,6 +4,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use alleycat_amp_bridge::AmpBridge;
 use alleycat_bridge_core::session::{Session, SessionRegistry, SessionRegistryConfig};
 use alleycat_bridge_core::{Bridge, LocalLauncher};
 use alleycat_claude_bridge::ClaudeBridge;
@@ -29,6 +30,7 @@ use crate::stream::IrohStream;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AgentKind {
     Pi,
+    Amp,
     Claude,
     Opencode,
     Droid,
@@ -109,6 +111,15 @@ impl AgentManager {
         }
         let pi_bridge = pi_builder.build().await.context("building pi bridge")?;
 
+        let mut amp_builder = AmpBridge::builder()
+            .agent_bin(snapshot.agents.amp.bin.clone())
+            .launcher(Arc::new(LocalLauncher))
+            .dangerously_allow_all(snapshot.agents.amp.dangerously_allow_all);
+        if let Some(ref home) = codex_home {
+            amp_builder = amp_builder.codex_home(home.clone());
+        }
+        let amp_bridge = amp_builder.build().await.context("building amp bridge")?;
+
         let mut claude_builder = ClaudeBridge::builder()
             .agent_bin(snapshot.agents.claude.bin.clone())
             .launcher(Arc::new(LocalLauncher))
@@ -134,6 +145,7 @@ impl AgentManager {
 
         let mut bridges: HashMap<AgentKind, Arc<dyn Bridge>> = HashMap::new();
         bridges.insert(AgentKind::Pi, pi_bridge as Arc<dyn Bridge>);
+        bridges.insert(AgentKind::Amp, amp_bridge as Arc<dyn Bridge>);
         bridges.insert(AgentKind::Claude, claude_bridge as Arc<dyn Bridge>);
         bridges.insert(AgentKind::Droid, droid_bridge as Arc<dyn Bridge>);
 
@@ -199,6 +211,12 @@ impl AgentManager {
                 display_name: "Pi".to_string(),
                 wire: AgentWire::Jsonl,
                 available: self.pi_available(),
+            },
+            AgentInfo {
+                name: "amp".to_string(),
+                display_name: "Amp".to_string(),
+                wire: AgentWire::Jsonl,
+                available: self.amp_available(),
             },
             AgentInfo {
                 name: "opencode".to_string(),
@@ -285,6 +303,7 @@ impl AgentManager {
         match name {
             "codex" => Some("codex"),
             "pi" => Some("pi"),
+            "amp" => Some("amp"),
             "opencode" => Some("opencode"),
             "claude" => Some("claude"),
             "droid" => Some("droid"),
@@ -297,6 +316,7 @@ impl AgentManager {
         match agent {
             "codex" => cfg.agents.codex.enabled,
             "pi" => cfg.agents.pi.enabled,
+            "amp" => cfg.agents.amp.enabled,
             "opencode" => cfg.agents.opencode.enabled,
             "claude" => cfg.agents.claude.enabled,
             "droid" => cfg.agents.droid.enabled,
@@ -511,6 +531,13 @@ impl AgentManager {
                 || which::which(&cfg.agents.opencode.bin).is_ok())
     }
 
+    fn amp_available(&self) -> bool {
+        let cfg = self.config.load();
+        cfg.agents.amp.enabled
+            && which::which(&cfg.agents.amp.bin).is_ok()
+            && has_amp_auth(&cfg.agents.amp.api_key_env)
+    }
+
     fn claude_available(&self) -> bool {
         let cfg = self.config.load();
         cfg.agents.claude.enabled && which::which(&cfg.agents.claude.bin).is_ok()
@@ -651,6 +678,7 @@ fn resolve_pi_bin(configured: &str) -> Option<String> {
 fn agent_kind_from_str(name: &str) -> Option<AgentKind> {
     match name {
         "pi" => Some(AgentKind::Pi),
+        "amp" => Some(AgentKind::Amp),
         "claude" => Some(AgentKind::Claude),
         "opencode" => Some(AgentKind::Opencode),
         "droid" => Some(AgentKind::Droid),
@@ -661,6 +689,7 @@ fn agent_kind_from_str(name: &str) -> Option<AgentKind> {
 fn agent_kind_str(kind: AgentKind) -> &'static str {
     match kind {
         AgentKind::Pi => "pi",
+        AgentKind::Amp => "amp",
         AgentKind::Claude => "claude",
         AgentKind::Opencode => "opencode",
         AgentKind::Droid => "droid",
@@ -671,6 +700,7 @@ impl crate::config::AgentsConfig {
     fn is_enabled(&self, kind: AgentKind) -> bool {
         match kind {
             AgentKind::Pi => self.pi.enabled,
+            AgentKind::Amp => self.amp.enabled,
             AgentKind::Claude => self.claude.enabled,
             AgentKind::Opencode => self.opencode.enabled,
             AgentKind::Droid => self.droid.enabled,
@@ -688,4 +718,18 @@ fn has_factory_auth(api_key_env: &str) -> bool {
     PathBuf::from(home)
         .join(".factory/auth.encrypted")
         .is_file()
+}
+
+fn has_amp_auth(api_key_env: &str) -> bool {
+    if std::env::var_os(api_key_env).is_some() {
+        return true;
+    }
+    let Some(home) = std::env::var_os("HOME") else {
+        return false;
+    };
+    let home = PathBuf::from(home);
+    let data_home = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".local/share"));
+    data_home.join("amp/secrets.json").is_file() || home.join(".amp/oauth").is_dir()
 }

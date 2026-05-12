@@ -23,9 +23,7 @@ pub async fn run() -> anyhow::Result<()> {
     if !service::is_installed().unwrap_or(false) {
         println!("First run — installing {name} as a user-level autostart...");
         if let Err(error) = service::install() {
-            eprintln!(
-                "warning: installing autostart failed: {error:#}; continuing without it"
-            );
+            eprintln!("warning: installing autostart failed: {error:#}; continuing without it");
         }
     }
 

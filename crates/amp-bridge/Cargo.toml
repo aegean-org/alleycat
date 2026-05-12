@@ -1,0 +1,42 @@
+[package]
+name = "alleycat-amp-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+description = "Codex app-server facade over Amp's stream JSON execute mode."
+
+[package.metadata.dist]
+dist = false
+
+[[bin]]
+name = "alleycat-amp-bridge"
+path = "src/main.rs"
+
+[lib]
+name = "alleycat_amp_bridge"
+path = "src/lib.rs"
+
+[dependencies]
+alleycat-bridge-core = { workspace = true }
+alleycat-claude-bridge = { workspace = true }
+alleycat-codex-proto = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true }
+dashmap = "6"
+directories = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["io-std"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

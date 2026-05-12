@@ -69,6 +69,7 @@ fn effort_to_thinking_tokens(effort: p::ReasoningEffort) -> u32 {
         // codex uses XHigh only on a few gpt-5.x models; claude has no
         // direct equivalent so we cap at the High budget.
         p::ReasoningEffort::XHigh => 32_768,
+        p::ReasoningEffort::Max => 32_768,
     }
 }
 

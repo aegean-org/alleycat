@@ -58,6 +58,7 @@ impl Default for SessionConfig {
 pub struct AgentsConfig {
     pub codex: CodexAgentConfig,
     pub pi: PiAgentConfig,
+    pub amp: AmpAgentConfig,
     pub opencode: OpencodeAgentConfig,
     pub claude: ClaudeAgentConfig,
     pub droid: DroidAgentConfig,
@@ -68,6 +69,7 @@ impl Default for AgentsConfig {
         Self {
             codex: CodexAgentConfig::default(),
             pi: PiAgentConfig::default(),
+            amp: AmpAgentConfig::default(),
             opencode: OpencodeAgentConfig::default(),
             claude: ClaudeAgentConfig::default(),
             droid: DroidAgentConfig::default(),
@@ -107,6 +109,31 @@ impl Default for PiAgentConfig {
         Self {
             enabled: true,
             bin: "pi".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct AmpAgentConfig {
+    pub enabled: bool,
+    pub bin: String,
+    /// Env var that provides non-interactive Amp auth for daemon launches.
+    /// Amp can also use its own local login state, but this keeps headless
+    /// installs explicit.
+    pub api_key_env: String,
+    /// Keep the bridge default aligned for automation, while allowing
+    /// policy-focused installs to opt out and rely on Amp settings/plugins.
+    pub dangerously_allow_all: bool,
+}
+
+impl Default for AmpAgentConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            bin: "amp".to_string(),
+            api_key_env: "AMP_API_KEY".to_string(),
+            dangerously_allow_all: true,
         }
     }
 }

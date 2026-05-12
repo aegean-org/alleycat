@@ -11,6 +11,7 @@ use tokio::process::Child;
 use crate::TargetId;
 use crate::transport::JsonRpcClient;
 
+pub mod amp;
 pub mod claude;
 pub mod codex;
 pub mod droid;
@@ -75,6 +76,7 @@ pub async fn spawn(opts: TargetSpawn) -> Result<TargetHandle> {
     match opts.target {
         TargetId::Codex => codex::spawn(opts).await,
         TargetId::Pi => pi::spawn(opts).await,
+        TargetId::Amp => amp::spawn(opts).await,
         TargetId::Claude => claude::spawn(opts).await,
         TargetId::Opencode => opencode::spawn(opts).await,
         TargetId::Droid => droid::spawn(opts).await,

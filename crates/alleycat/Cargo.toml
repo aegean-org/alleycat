@@ -21,6 +21,7 @@ name = "alleycat"
 path = "src/main.rs"
 
 [dependencies]
+alleycat-amp-bridge = { workspace = true }
 alleycat-bridge-core = { workspace = true }
 alleycat-claude-bridge = { workspace = true }
 alleycat-droid-bridge = { workspace = true }

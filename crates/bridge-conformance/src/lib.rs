@@ -36,6 +36,8 @@ pub enum TargetId {
     Codex,
     /// `alleycat-pi-bridge` over stdio (`pi-coding-agent` backend).
     Pi,
+    /// `alleycat-amp-bridge` over stdio (`amp --stream-json` backend).
+    Amp,
     /// `alleycat-claude-bridge` over stdio (`claude -p` backend).
     Claude,
     /// `alleycat-opencode-bridge` over Unix socket (`opencode serve` backend).
@@ -48,6 +50,7 @@ impl TargetId {
     pub const ALL: &'static [TargetId] = &[
         TargetId::Codex,
         TargetId::Pi,
+        TargetId::Amp,
         TargetId::Claude,
         TargetId::Opencode,
         TargetId::Droid,
@@ -57,6 +60,7 @@ impl TargetId {
         match self {
             TargetId::Codex => "codex",
             TargetId::Pi => "pi",
+            TargetId::Amp => "amp",
             TargetId::Claude => "claude",
             TargetId::Opencode => "opencode",
             TargetId::Droid => "droid",

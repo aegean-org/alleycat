@@ -70,6 +70,7 @@ dependencies = [
 name = "alleycat"
 version = "0.1.0"
 dependencies = [
+ "alleycat-amp-bridge",
  "alleycat-bridge-core",
  "alleycat-claude-bridge",
  "alleycat-droid-bridge",
@@ -98,6 +99,29 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "which",
+]
+
+[[package]]
+name = "alleycat-amp-bridge"
+version = "0.1.0"
+dependencies = [
+ "alleycat-bridge-core",
+ "alleycat-claude-bridge",
+ "alleycat-codex-proto",
+ "anyhow",
+ "async-trait",
+ "base64",
+ "chrono",
+ "dashmap",
+ "directories",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

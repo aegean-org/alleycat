@@ -32,6 +32,12 @@ async fn conformance_pi() {
 }
 
 #[tokio::test]
+#[ignore = "live conformance — requires `amp` CLI"]
+async fn conformance_amp() {
+    run_target(TargetId::Amp).await;
+}
+
+#[tokio::test]
 #[ignore = "live conformance — requires `claude` CLI on PATH"]
 async fn conformance_claude() {
     run_target(TargetId::Claude).await;
@@ -74,6 +80,7 @@ async fn conformance_diff_all_against_codex() {
     let mut had_findings = false;
     for target in [
         TargetId::Pi,
+        TargetId::Amp,
         TargetId::Claude,
         TargetId::Opencode,
         TargetId::Droid,
@@ -221,6 +228,12 @@ fn build_spawn(
         (TargetId::Pi, Prereq::Pi { bin }) => TargetSpawn {
             target,
             bridge_bin: Some(workspace_bin("alleycat-pi-bridge")?),
+            backend_bin: Some(bin.clone()),
+            cwd,
+        },
+        (TargetId::Amp, Prereq::Amp { bin }) => TargetSpawn {
+            target,
+            bridge_bin: Some(workspace_bin("alleycat-amp-bridge")?),
             backend_bin: Some(bin.clone()),
             cwd,
         },

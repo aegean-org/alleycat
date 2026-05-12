@@ -82,10 +82,10 @@ pub fn log_dir() -> anyhow::Result<PathBuf> {
     {
         let base = base_dirs()?;
         let app = crate::app();
-        path = base
-            .home_dir()
-            .join("Library/Logs")
-            .join(format!("{}.{}.{}", app.qualifier, app.organization, app.application));
+        path = base.home_dir().join("Library/Logs").join(format!(
+            "{}.{}.{}",
+            app.qualifier, app.organization, app.application
+        ));
     }
     #[cfg(target_os = "linux")]
     {
@@ -213,7 +213,10 @@ pub fn control_pipe_name() -> anyhow::Result<String> {
         let base = base_dirs()?;
         let home = base.home_dir().to_string_lossy().to_string();
         let hash = short_user_hash(&home);
-        Ok(format!(r"\\.\pipe\{app}-control-{hash}", app = crate::app().application))
+        Ok(format!(
+            r"\\.\pipe\{app}-control-{hash}",
+            app = crate::app().application
+        ))
     }
     #[cfg(not(windows))]
     {

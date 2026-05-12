@@ -372,6 +372,7 @@ async fn apply_overrides(handle: &Arc<PiProcessHandle>, params: &p::TurnStartPar
             p::ReasoningEffort::Medium => pi::ThinkingLevel::Medium,
             p::ReasoningEffort::High => pi::ThinkingLevel::High,
             p::ReasoningEffort::XHigh => pi::ThinkingLevel::Xhigh,
+            p::ReasoningEffort::Max => pi::ThinkingLevel::Xhigh,
         };
         let _ = handle
             .send_request(pi::RpcCommand::SetThinkingLevel(pi::SetThinkingLevelCmd {

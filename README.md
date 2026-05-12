@@ -2,7 +2,7 @@
 
 ![Alleycat logo](assets/alleycat-logo.png)
 
-Iroh-backed bridge that multiplexes a few local coding agents — Codex, Pi, OpenCode, Claude, and Factory Droid — onto a single QUIC connection. Run the daemon on your machine, scan a QR with a paired client, and the client picks an agent over the same stream multiplexer.
+Iroh-backed bridge that multiplexes a few local coding agents — Codex, Pi, Amp, OpenCode, Claude, and Factory Droid — onto a single QUIC connection. Run the daemon on your machine, scan a QR with a paired client, and the client picks an agent over the same stream multiplexer.
 
 ## Install
 
@@ -31,6 +31,7 @@ The daemon spawns external coding-agent CLIs on demand — install whichever one
 |---|---|
 | `claude` | `npm install -g @anthropic-ai/claude-code` (or `bun install -g @anthropic-ai/claude-code`). Then `claude /login` once. |
 | `opencode` | See [opencode docs](https://opencode.ai). |
+| `amp` | Install Amp from [ampcode.com/install](https://ampcode.com/install), then either run `amp login` once or set `AMP_API_KEY` in the daemon environment. |
 | `pi` | See pi-mono docs. |
 | `codex` | Install the `codex` CLI ([codex docs](https://github.com/openai/codex)). The daemon spawns `codex app-server` on demand. |
 | `droid` | Install Factory Droid, then either run `droid login` once or set `FACTORY_API_KEY` in the daemon environment. |
@@ -59,6 +60,7 @@ The daemon talks to the CLI over a Unix domain socket on macOS/Linux and a per-u
 |---|---|---|
 | `codex` | Yes, one shared backend | Lazy spawn of `codex app-server --listen ws://<host>:<port>` on first `connect`. The child is kept alive for the daemon lifetime; each iroh stream becomes a fresh websocket client and conversations persist independently of any single client. |
 | `pi` | Yes, per codex thread | `PiPool` spawns `pi --mode rpc` on demand, bounded at 16 processes with a 10-minute idle reap and LRU eviction. |
+| `amp` | Yes, per turn | Spawns `amp --execute --stream-json --stream-json-thinking --stream-json-input` for each turn, translates Amp stream JSON into codex app-server lifecycle events, stores Alleycat-owned thread records, and saves Amp's `T-*` thread id for continuation. |
 | `opencode` | Yes, one shared backend | Lazy spawn of `opencode serve --port=auto --auth-token=auto` on first connect, gated on `/global/health`. Or set `OPENCODE_BRIDGE_BACKEND_URL` to point at an existing instance. |
 | `claude` | Yes, per codex thread | `ClaudePool` spawns `claude -p --input-format stream-json --output-format stream-json --session-id <thread_id> --dangerously-skip-permissions` on demand. Same 16-cap, 10-minute idle reap, LRU eviction as pi. Sessions resume on next access via `--resume <thread_id>`. |
 | `droid` | Yes, per codex thread | Spawns `droid exec --input-format stream-jsonrpc --output-format stream-jsonrpc --cwd <cwd>` and translates Factory session notifications into the codex app-server wire. |
@@ -90,7 +92,7 @@ or
 {"op": "connect", "v": 1, "token": "...", "agent": "codex"}
 ```
 
-The daemon answers with `{ok, agents?, error?}`. On `connect`, after the response the stream becomes the agent's native wire — websocket frames for `codex` (the daemon proxies straight to the shared `codex app-server` listener), JSON-RPC over JSONL for `pi`, `opencode`, `claude`, and `droid`.
+The daemon answers with `{ok, agents?, error?}`. On `connect`, after the response the stream becomes the agent's native wire — websocket frames for `codex` (the daemon proxies straight to the shared `codex app-server` listener), JSON-RPC over JSONL for `pi`, `amp`, `opencode`, `claude`, and `droid`.
 
 ## Configuration
 
@@ -110,6 +112,12 @@ port = 8390
 enabled = true
 bin = "pi"
 
+[agents.amp]
+enabled = true
+bin = "amp"
+api_key_env = "AMP_API_KEY"
+dangerously_allow_all = true
+
 [agents.opencode]
 enabled = true
 bin = "opencode"
@@ -124,7 +132,7 @@ bin = "droid"
 api_key_env = "FACTORY_API_KEY"
 ```
 
-Reload swaps config that's read per-request (token, agent enable flags). Codex's `bin`/`host`/`port`, pi's `bin`, OpenCode's `bin`/runtime port, and Droid's `bin` are pinned at first spawn; changing those requires `alleycat stop` + `serve`.
+Reload swaps config that's read per-request (token, agent enable flags). Codex's `bin`/`host`/`port`, pi's `bin`, Amp's `bin`/permission mode, OpenCode's `bin`/runtime port, and Droid's `bin` are pinned at first spawn; changing those requires `alleycat stop` + `serve`.
 
 ## File layout
 
@@ -142,7 +150,7 @@ The Unix control socket falls through `XDG_RUNTIME_DIR` → state dir → `TMPDI
 
 ## Notes
 
-- Codex, Pi, OpenCode, Claude, and Droid children inherit `kill_on_drop` semantics, so they exit when the daemon does.
+- Codex, Pi, Amp, OpenCode, Claude, and Droid children inherit `kill_on_drop` semantics, so they exit when the daemon does.
 - `alleycat stop` shuts the iroh endpoint and the daemon process; launchd / systemd will restart it under their normal supervision.
 
 ## Building from source
@@ -157,6 +165,7 @@ target/release/alleycat install
 The workspace crates are:
 
 - `crates/alleycat` — `alleycat` daemon binary. Owns the iroh endpoint, the persistent identity, the agent dispatcher, and an OS-native control socket so the CLI can talk to the running daemon.
+- `crates/amp-bridge` — Amp `--stream-json` process wrapper plus codex-shaped turn/tool translation and Alleycat-owned Amp thread records.
 - `crates/bridge-conformance` — live conformance harness for comparing bridge behavior against codex app-server wire shapes.
 - `crates/bridge-core` — shared JSON-RPC framing, server scaffolding, and notification plumbing used by the bridges.
 - `crates/codex-proto` — shared codex `app-server` v2 wire shapes used by every bridge.

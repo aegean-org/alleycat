@@ -199,8 +199,8 @@ fn run_systemctl(args: &[&str]) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use crate::test_support::TempHome;
-    use std::path::PathBuf;
     use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
 
     fn tempdir() -> PathBuf {
         let mut path = std::env::temp_dir();
@@ -233,7 +233,9 @@ mod tests {
             log.display()
         );
         std::fs::write(&script, body).expect("write fake systemctl");
-        let mut perms = std::fs::metadata(&script).expect("fake systemctl metadata").permissions();
+        let mut perms = std::fs::metadata(&script)
+            .expect("fake systemctl metadata")
+            .permissions();
         perms.set_mode(0o755);
         std::fs::set_permissions(&script, perms).expect("make fake systemctl executable");
         script
@@ -352,6 +354,9 @@ mod tests {
         }
         std::fs::write(&unit_path, b"[Unit]\nDescription=Alleycat\n").expect("write unit");
 
-        assert!(is_installed().expect("check installed"), "unit on disk should count as installed");
+        assert!(
+            is_installed().expect("check installed"),
+            "unit on disk should count as installed"
+        );
     }
 }

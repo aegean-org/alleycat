@@ -994,6 +994,7 @@ fn parse_effort(value: &serde_json::Value) -> Option<p::ReasoningEffort> {
         "medium" => Some(p::ReasoningEffort::Medium),
         "high" => Some(p::ReasoningEffort::High),
         "xhigh" => Some(p::ReasoningEffort::XHigh),
+        "max" => Some(p::ReasoningEffort::Max),
         _ => None,
     }
 }
@@ -1010,6 +1011,7 @@ fn pi_thinking_level(effort: p::ReasoningEffort) -> pi::ThinkingLevel {
         p::ReasoningEffort::Medium => pi::ThinkingLevel::Medium,
         p::ReasoningEffort::High => pi::ThinkingLevel::High,
         p::ReasoningEffort::XHigh => pi::ThinkingLevel::Xhigh,
+        p::ReasoningEffort::Max => pi::ThinkingLevel::Xhigh,
     }
 }
 
