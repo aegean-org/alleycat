@@ -73,11 +73,12 @@ fn translate_pi_model(model: &PiAvailableModel, is_default: bool) -> p::Model {
         .or(model.id.as_deref())
         .unwrap_or("unknown");
     let id = format!("{provider}/{model_id}");
-    let display_name = model
+    let base_display_name = model
         .display_name
         .clone()
         .or_else(|| model.label.clone())
         .unwrap_or_else(|| model_id.to_string());
+    let display_name = display_name_with_provider(provider, &base_display_name);
     let description = model.description.clone().unwrap_or_default();
 
     // Codex contract: `supported_reasoning_efforts` is a list of
@@ -132,6 +133,26 @@ fn standard_service_tiers() -> Vec<p::ModelServiceTier> {
         name: "Standard".to_string(),
         description: "Default bridge service tier".to_string(),
     }]
+}
+
+fn display_name_with_provider(provider: &str, display_name: &str) -> String {
+    let display_name = display_name.trim();
+    let display_name = if display_name.is_empty() {
+        "unknown"
+    } else {
+        display_name
+    };
+    let provider = provider.trim();
+    if provider.is_empty() || provider == "pi" {
+        return display_name.to_string();
+    }
+    if display_name
+        .to_ascii_lowercase()
+        .contains(&provider.to_ascii_lowercase())
+    {
+        return display_name.to_string();
+    }
+    format!("{display_name} ({provider})")
 }
 
 /// Lossy view over pi's `Model<any>` shape (`pi-mono/packages/ai/src/types.ts`).
@@ -202,7 +223,7 @@ mod tests {
         let m = translate_pi_model(&pi, true);
         assert_eq!(m.id, "openai/gpt-5");
         assert_eq!(m.model, "gpt-5");
-        assert_eq!(m.display_name, "GPT-5");
+        assert_eq!(m.display_name, "GPT-5 (openai)");
         assert!(m.is_default);
         assert_eq!(m.supported_reasoning_efforts.len(), 4);
         assert!(matches!(
@@ -224,6 +245,18 @@ mod tests {
         assert_eq!(m.model, "haiku");
         assert_eq!(m.display_name, "haiku");
         assert!(!m.is_default);
+    }
+
+    #[test]
+    fn translate_pi_model_does_not_duplicate_provider_in_display_name() {
+        let pi = PiAvailableModel {
+            provider: Some("openai".into()),
+            model_id: Some("gpt-5".into()),
+            display_name: Some("OpenAI GPT-5".into()),
+            ..Default::default()
+        };
+        let m = translate_pi_model(&pi, false);
+        assert_eq!(m.display_name, "OpenAI GPT-5");
     }
 
     #[test]
