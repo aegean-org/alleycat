@@ -110,7 +110,7 @@ impl AgentManager {
         }
 
         let pi_bin = resolve_pi_bin(&snapshot.agents.pi.bin)
-            .unwrap_or_else(|| snapshot.agents.pi.bin.clone());
+            .unwrap_or_else(|| PathBuf::from(snapshot.agents.pi.bin.clone()));
         let mut pi_builder = PiBridge::builder()
             .agent_bin(pi_bin)
             .launcher(Arc::new(LocalLauncher));
@@ -913,13 +913,13 @@ fn program_candidates(program: &Path) -> Vec<PathBuf> {
 /// users with stale config or non-canonical install layouts still get the
 /// agent reported as available and spawn against a binary that actually
 /// exists. Returns the resolved name (the one that should be invoked).
-fn resolve_pi_bin(configured: &str) -> Option<String> {
-    if which::which(configured).is_ok() {
-        return Some(configured.to_string());
+fn resolve_pi_bin(configured: &str) -> Option<PathBuf> {
+    if let Some(path) = which::which(configured).ok() {
+        return Some(path);
     }
     for alias in ["pi", "pi-coding-agent"] {
-        if alias != configured && which::which(alias).is_ok() {
-            return Some(alias.to_string());
+        if alias != configured && let Some (path) = which::which(alias).ok() {
+            return Some(path);
         }
     }
     None
