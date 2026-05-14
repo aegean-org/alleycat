@@ -25,6 +25,8 @@ pub struct AgentManifest {
     pub visible_modes: Option<&'static [&'static str]>,
     pub supports_ssh_bridge: bool,
     pub uses_direct_codex_port: bool,
+    pub supports_thread_permission_overrides: bool,
+    pub reports_effective_thread_permissions: bool,
 }
 
 impl AgentManifest {
@@ -46,6 +48,8 @@ impl AgentManifest {
                 .map(|modes| modes.iter().map(|s| (*s).to_owned()).collect()),
             supports_ssh_bridge: self.supports_ssh_bridge,
             uses_direct_codex_port: self.uses_direct_codex_port,
+            supports_thread_permission_overrides: self.supports_thread_permission_overrides,
+            reports_effective_thread_permissions: self.reports_effective_thread_permissions,
         }
     }
 }
@@ -64,6 +68,8 @@ pub const MANIFESTS: &[AgentManifest] = &[
         visible_modes: None,
         supports_ssh_bridge: true,
         uses_direct_codex_port: true,
+        supports_thread_permission_overrides: true,
+        reports_effective_thread_permissions: true,
     },
     AgentManifest {
         name: "pi",
@@ -78,6 +84,8 @@ pub const MANIFESTS: &[AgentManifest] = &[
         visible_modes: None,
         supports_ssh_bridge: true,
         uses_direct_codex_port: false,
+        supports_thread_permission_overrides: false,
+        reports_effective_thread_permissions: false,
     },
     AgentManifest {
         name: "amp",
@@ -92,6 +100,8 @@ pub const MANIFESTS: &[AgentManifest] = &[
         visible_modes: Some(&["smart", "rush", "deep"]),
         supports_ssh_bridge: false,
         uses_direct_codex_port: false,
+        supports_thread_permission_overrides: false,
+        reports_effective_thread_permissions: false,
     },
     AgentManifest {
         name: "opencode",
@@ -106,6 +116,8 @@ pub const MANIFESTS: &[AgentManifest] = &[
         visible_modes: None,
         supports_ssh_bridge: true,
         uses_direct_codex_port: false,
+        supports_thread_permission_overrides: false,
+        reports_effective_thread_permissions: false,
     },
     AgentManifest {
         name: "claude",
@@ -120,6 +132,8 @@ pub const MANIFESTS: &[AgentManifest] = &[
         visible_modes: None,
         supports_ssh_bridge: true,
         uses_direct_codex_port: false,
+        supports_thread_permission_overrides: false,
+        reports_effective_thread_permissions: false,
     },
     AgentManifest {
         name: "droid",
@@ -134,6 +148,8 @@ pub const MANIFESTS: &[AgentManifest] = &[
         visible_modes: None,
         supports_ssh_bridge: false,
         uses_direct_codex_port: false,
+        supports_thread_permission_overrides: false,
+        reports_effective_thread_permissions: false,
     },
     AgentManifest {
         name: "hermes",
@@ -148,6 +164,8 @@ pub const MANIFESTS: &[AgentManifest] = &[
         visible_modes: None,
         supports_ssh_bridge: false,
         uses_direct_codex_port: false,
+        supports_thread_permission_overrides: false,
+        reports_effective_thread_permissions: false,
     },
     AgentManifest {
         name: "devin",
@@ -162,6 +180,8 @@ pub const MANIFESTS: &[AgentManifest] = &[
         visible_modes: None,
         supports_ssh_bridge: true,
         uses_direct_codex_port: false,
+        supports_thread_permission_overrides: false,
+        reports_effective_thread_permissions: false,
     },
 ];
 

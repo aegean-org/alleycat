@@ -26,7 +26,7 @@ use crate::cli;
 use crate::daemon::control::Request as ControlRequest;
 use crate::framing::{read_json_frame, write_json_frame};
 use crate::host;
-use crate::protocol::{ALLEYCAT_ALPN, PROTOCOL_VERSION, PairPayload, Request, Response};
+use crate::protocol::{ALLEYCAT_ALPN, PROTOCOL_VERSION, PairPayload, Request, Response, Resume};
 
 #[derive(Args, Debug)]
 pub struct ProbeArgs {
@@ -61,6 +61,17 @@ pub struct ProbeArgs {
     /// Timeout for the JSON-RPC method response, in seconds.
     #[arg(long, default_value_t = 30)]
     pub timeout_secs: u64,
+    /// Send an explicit alleycat resume cursor on connect. Useful for
+    /// debugging reconnect/replay behavior; clients normally use the highest
+    /// `_alleycat_seq` they observed before reconnecting.
+    #[arg(long)]
+    pub resume_from: Option<u64>,
+    /// After the first probe finishes, open a second connect stream on the
+    /// same iroh connection with this resume cursor. This simulates a client
+    /// reconnect from the same endpoint identity, so the host can attach the
+    /// existing session and exercise replay/drift paths.
+    #[arg(long)]
+    pub repeat_resume_from: Option<u64>,
 }
 
 pub async fn run(args: ProbeArgs) -> anyhow::Result<()> {
@@ -137,7 +148,14 @@ async fn probe_with_endpoint(
 
     let result = match args.agent.as_deref() {
         None => list_agents(&conn, token).await,
-        Some(agent) => probe_agent(&conn, token, agent, args).await,
+        Some(agent) => {
+            probe_agent(&conn, token, agent, args, args.resume_from).await?;
+            if let Some(resume_from) = args.repeat_resume_from {
+                eprintln!("probe: opening second connect stream with resume_from={resume_from}");
+                probe_agent(&conn, token, agent, args, Some(resume_from)).await?;
+            }
+            Ok(())
+        }
     };
     conn.close(iroh::endpoint::VarInt::from_u32(0), b"probe complete");
     result
@@ -175,6 +193,7 @@ async fn probe_agent(
     token: &str,
     agent: &str,
     args: &ProbeArgs,
+    resume_from: Option<u64>,
 ) -> anyhow::Result<()> {
     let method = args
         .method
@@ -193,7 +212,7 @@ async fn probe_agent(
             v: PROTOCOL_VERSION,
             token: token.to_string(),
             agent: agent.to_string(),
-            resume: None,
+            resume: resume_from.map(|last_seq| Resume { last_seq }),
         },
     )
     .await?;
@@ -208,7 +227,17 @@ async fn probe_agent(
             resp.error.unwrap_or_else(|| "<no error>".to_string())
         );
     }
-    eprintln!("probe: connect ok agent={agent}; switching to JSONL");
+    if let Some(session) = resp.session.as_ref() {
+        eprintln!(
+            "probe: connect ok agent={agent} attached={:?} current_seq={} floor_seq={} resume_from={:?}; switching to JSONL",
+            session.attached, session.current_seq, session.floor_seq, resume_from
+        );
+    } else {
+        eprintln!(
+            "probe: connect ok agent={agent} resume_from={:?}; switching to JSONL",
+            resume_from
+        );
+    }
 
     let mut reader = BufReader::new(recv);
 

@@ -86,6 +86,17 @@ pub struct AgentCapabilities {
     /// be dialed directly on its TCP port without going through Alleycat.
     #[serde(default)]
     pub uses_direct_codex_port: bool,
+    /// Whether a client may send per-thread approval/sandbox overrides and
+    /// expect the runtime to enforce them. False for bridges that launch in a
+    /// fixed/yolo-like mode or whose upstream agent has no thread permission
+    /// profile system.
+    #[serde(default)]
+    pub supports_thread_permission_overrides: bool,
+    /// Whether thread snapshots from this agent contain authoritative
+    /// effective approval/sandbox policies. False means clients should not
+    /// hydrate or imply permissions from missing/placeholder values.
+    #[serde(default)]
+    pub reports_effective_thread_permissions: bool,
 }
 
 /// Resume hint sent on `Connect` when a reconnecting client wants to
