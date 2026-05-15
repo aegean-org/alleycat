@@ -642,7 +642,7 @@ fn render_tool_call(state: &ToolCallState) -> Value {
         "tool": tool,
         "arguments": state.raw_input,
         "status": dyn_status,
-        "contentItems": state.content,
+        "contentItems": acp_content_to_codex_items(&state.content),
     });
     if let Some(s) = success {
         item["success"] = Value::Bool(s);
@@ -681,6 +681,62 @@ fn extract_command_from_content(content: &[Value]) -> Option<String> {
         }
     }
     None
+}
+
+/// Translate ACP tool-call content blocks (`{"type":"content","content":{...}}`,
+/// `{"type":"diff",...}`, `{"type":"terminal",...}`) into codex
+/// `DynamicToolCallOutputContentItem`s. The codex schema only accepts
+/// `inputText` and `inputImage` variants, so anything else collapses to
+/// `inputText` with a best-effort textual rendering. Sending the raw ACP
+/// shape through made iOS fail thread/resume deserialization with
+/// `unknown variant 'content', expected 'inputText' or 'inputImage'`.
+fn acp_content_to_codex_items(content: &[Value]) -> Vec<Value> {
+    let mut out = Vec::new();
+    for block in content {
+        let block_type = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        match block_type {
+            "content" => {
+                let Some(inner) = block.get("content") else { continue };
+                let inner_type = inner.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                match inner_type {
+                    "text" => {
+                        if let Some(text) = inner.get("text").and_then(|v| v.as_str()) {
+                            out.push(json!({"type": "inputText", "text": text}));
+                        }
+                    }
+                    "image" => {
+                        if let Some(url) = inner.get("uri").and_then(|v| v.as_str()) {
+                            out.push(json!({"type": "inputImage", "imageUrl": url}));
+                        } else if let Some(data) = inner.get("data").and_then(|v| v.as_str()) {
+                            let mime = inner
+                                .get("mimeType")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("image/png");
+                            out.push(json!({
+                                "type": "inputImage",
+                                "imageUrl": format!("data:{mime};base64,{data}"),
+                            }));
+                        }
+                    }
+                    "resource" => {
+                        if let Some(text) =
+                            inner.get("resource").and_then(|r| r.get("text")).and_then(|v| v.as_str())
+                        {
+                            out.push(json!({"type": "inputText", "text": text}));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            "terminal" => {
+                if let Some(t) = block.get("terminalId").and_then(|v| v.as_str()) {
+                    out.push(json!({"type": "inputText", "text": format!("[terminal:{t}]")}));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 fn aggregate_text_output(content: &[Value]) -> Option<String> {

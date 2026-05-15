@@ -10,6 +10,18 @@ use tracing::{info, instrument};
 use crate::acp_client::AcpClient;
 use crate::translate;
 
+/// ACP `session/new` and `session/load` require `cwd` to be an absolute
+/// path. Grok enforces this strictly and rejects empty or relative paths
+/// with `-32602 Invalid params: Path is not absolute`. When the caller
+/// didn't provide one we fall back to `/` so the agent at least accepts
+/// the request.
+fn coerce_absolute_cwd(cwd: Option<&str>) -> &str {
+    match cwd {
+        Some(p) if p.starts_with('/') => p,
+        _ => "/",
+    }
+}
+
 /// Handle initialize request.
 pub async fn handle_initialize(
     client: &Arc<AcpClient>,
@@ -484,12 +496,13 @@ pub async fn handle_thread_resume(
     // ACP spec method is `session/load`, not `session/resume`. The agent
     // advertises this via `agentCapabilities.loadSession: true`. `mcpServers`
     // is required by ACP even when empty. `cwd` is also required as a
-    // string; some clients (litter) call thread/resume without knowing the
-    // session's original cwd, so we coerce `None` → "" rather than passing
-    // null, which devin's serde rejects with "expected path string".
+    // string; mobile clients often call thread/resume without knowing the
+    // session's original cwd. Devin's serde tolerates `""`, but grok
+    // rejects relative paths with `-32602 Invalid params: Path is not
+    // absolute: `, so fall back to `/` when the client didn't supply one.
     let acp_request = json!({
         "sessionId": typed.thread_id,
-        "cwd": typed.cwd.clone().unwrap_or_default(),
+        "cwd": coerce_absolute_cwd(typed.cwd.as_deref()),
         "mcpServers": [],
     });
 
@@ -1031,6 +1044,40 @@ pub async fn handle_turn_start(
     let stable_turn_id = provisional_turn_id.clone();
     let user_item_id = format!("acp-user-{provisional_user_uuid}");
 
+    // Build and emit the user-message item BEFORE issuing `session/prompt`
+    // so iOS sees it ordered ahead of the assistant's streamed items. If
+    // we emitted it after the streaming call, the agent's reasoning /
+    // agentMessage notifications would arrive first on the wire and the
+    // user bubble would render under the response. We preserve the full
+    // codex `UserInput[]` shape (text + image + mention + skill) by
+    // round-tripping `typed.input` directly.
+    let user_content = serde_json::to_value(&typed.input)
+        .unwrap_or_else(|_| json!([{"type": "text", "text": text_content.clone()}]));
+    let user_item = json!({
+        "id": user_item_id,
+        "type": "userMessage",
+        "content": user_content,
+    });
+    let user_ts_ms = chrono::Utc::now().timestamp_millis();
+    let _ = ctx.notifier().send_notification(
+        "item/started",
+        json!({
+            "threadId": typed.thread_id,
+            "turnId": stable_turn_id,
+            "item": user_item,
+            "startedAtMs": user_ts_ms,
+        }),
+    );
+    let _ = ctx.notifier().send_notification(
+        "item/completed",
+        json!({
+            "threadId": typed.thread_id,
+            "turnId": stable_turn_id,
+            "item": user_item,
+            "completedAtMs": user_ts_ms,
+        }),
+    );
+
     // Stream notifications live as they arrive. The emitter renders
     // codex item/* notifications on the fly and also accumulates the
     // final item list for StoredTurn.
@@ -1082,38 +1129,9 @@ pub async fn handle_turn_start(
         "consumed live ACP stream"
     );
 
-    // Prepend the user message we just sent. We preserve the full codex
-    // `UserInput[]` shape (text + image + mention + skill) by
-    // round-tripping `typed.input` directly rather than collapsing it
-    // to a text string. The streaming emitter skips user_message_chunk
-    // echoes, so no dedup needed for downstream items.
-    let user_content = serde_json::to_value(&typed.input)
-        .unwrap_or_else(|_| json!([{"type": "text", "text": text_content.clone()}]));
-    let user_item = json!({
-        "id": user_item_id,
-        "type": "userMessage",
-        "content": user_content,
-    });
-    // Emit the user item live too so iOS sees it as a discrete event.
-    let user_ts_ms = chrono::Utc::now().timestamp_millis();
-    let _ = ctx.notifier().send_notification(
-        "item/started",
-        json!({
-            "threadId": typed.thread_id,
-            "turnId": stable_turn_id,
-            "item": user_item,
-            "startedAtMs": user_ts_ms,
-        }),
-    );
-    let _ = ctx.notifier().send_notification(
-        "item/completed",
-        json!({
-            "threadId": typed.thread_id,
-            "turnId": stable_turn_id,
-            "item": user_item,
-            "completedAtMs": user_ts_ms,
-        }),
-    );
+    // The streaming emitter skips user_message_chunk echoes, so the
+    // assembled stream.items doesn't include the user message — we
+    // prepend it below for the canonical turn payload.
     let mut canonical_items: Vec<Value> = Vec::with_capacity(stream.items.len() + 1);
     canonical_items.push(user_item);
     canonical_items.extend(stream.items);
@@ -1290,10 +1308,12 @@ pub async fn handle_thread_fork(
     let agent_id = ctx.session().agent.to_string();
 
     // ACP `session/new` requires both `cwd: string` and `mcpServers: array`
-    // (even when empty). Without `mcpServers` devin returns "missing field mcpServers".
-    let cwd = typed.cwd.clone().unwrap_or_default();
+    // (even when empty). Without `mcpServers` devin returns "missing field
+    // mcpServers". Grok additionally rejects empty/relative cwd with
+    // `-32602 Invalid params: Path is not absolute`, so coerce to `/`.
+    let cwd = coerce_absolute_cwd(typed.cwd.as_deref()).to_string();
     let acp_request = json!({
-        "cwd": cwd,
+        "cwd": &cwd,
         "mcpServers": [],
     });
 

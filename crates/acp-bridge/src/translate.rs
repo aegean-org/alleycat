@@ -54,9 +54,13 @@ pub fn acp_to_codex_initialize_result(acp_response: &Value) -> Result<Value, any
 /// (even when empty). Devin's serde rejects requests missing
 /// `mcpServers` with `"missing field mcpServers"`.
 pub fn codex_to_acp_new_session(codex_params: &Value) -> Result<Value, anyhow::Error> {
+    // Grok rejects relative paths (including the empty string) with
+    // `-32602 Invalid params: Path is not absolute`, so fall through to
+    // `/` whenever the client didn't supply a valid absolute cwd.
     let cwd = codex_params
         .get("cwd")
         .and_then(|v| v.as_str())
+        .filter(|s| s.starts_with('/'))
         .unwrap_or("/");
 
     let acp_request = serde_json::json!({

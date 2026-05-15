@@ -103,10 +103,23 @@ fn check_hermes() -> Result<Prereq, SkipReason> {
 }
 
 fn check_acp() -> Result<Prereq, SkipReason> {
-    let bin = which_or_env("ACP_BRIDGE_AGENT_BIN", "devin").ok_or_else(|| {
-        SkipReason::Reason("ACP agent (e.g., devin) not on PATH; set ACP_BRIDGE_AGENT_BIN".into())
-    })?;
-    Ok(Prereq::Acp { bin })
+    // Support explicit path via env (e.g. ACP_BRIDGE_AGENT_BIN=/Users/.../grok)
+    if let Some(p) = std::env::var_os("ACP_BRIDGE_AGENT_BIN") {
+        if !p.is_empty() {
+            let path = std::path::PathBuf::from(&p);
+            if path.exists() {
+                return Ok(Prereq::Acp { bin: path });
+            }
+        }
+    }
+
+    // Fallback to looking for "devin" on PATH (original behavior)
+    match which::which("devin") {
+        Ok(bin) => Ok(Prereq::Acp { bin }),
+        Err(_) => Err(SkipReason::Reason(
+            "ACP agent (devin, grok, etc.) not found. Set ACP_BRIDGE_AGENT_BIN to an absolute path.".into(),
+        )),
+    }
 }
 
 fn which_or_env(env_var: &str, bin_name: &str) -> Option<PathBuf> {

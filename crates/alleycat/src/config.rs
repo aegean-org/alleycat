@@ -64,6 +64,7 @@ pub struct AgentsConfig {
     pub droid: DroidAgentConfig,
     pub hermes: HermesAgentConfig,
     pub devin: DevinAgentConfig,
+    pub grok: GrokAgentConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -224,6 +225,40 @@ impl Default for DevinAgentConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct GrokAgentConfig {
+    pub enabled: bool,
+    pub bin: String,
+
+    /// Start a fresh agent instead of joining a leader process.
+    /// Recommended default for Alleycat usage.
+    pub no_leader: bool,
+
+    /// Specific model ID to request (e.g. "grok-build").
+    pub model: Option<String>,
+
+    /// Automatically approve all tool executions.
+    pub always_approve: bool,
+
+    /// Reasoning effort level for reasoning-capable models.
+    /// Common values: "low", "medium", "high", "xhigh", "max".
+    pub reasoning_effort: Option<String>,
+}
+
+impl Default for GrokAgentConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            bin: "grok".to_string(),
+            no_leader: true,
+            model: None,
+            always_approve: false,
+            reasoning_effort: Some("medium".to_string()),
+        }
+    }
+}
+
 pub async fn load_or_init() -> anyhow::Result<HostConfig> {
     let path = paths::host_config_file()?;
     match fs::read_to_string(&path).await {
@@ -327,5 +362,8 @@ mod tests {
         assert!(config.agents.opencode.enabled);
         assert!(config.agents.claude.enabled);
         assert!(config.agents.droid.enabled);
+        assert!(config.agents.grok.enabled);
+        assert!(config.agents.grok.no_leader);
+        assert_eq!(config.agents.grok.reasoning_effort.as_deref(), Some("medium"));
     }
 }

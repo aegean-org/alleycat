@@ -11,6 +11,7 @@ use alleycat_bridge_core::session::{Session, SessionRegistry, SessionRegistryCon
 use alleycat_bridge_core::{Bridge, LocalLauncher};
 use alleycat_claude_bridge::ClaudeBridge;
 use alleycat_devin_bridge::DevinBridge;
+use alleycat_grok_bridge::GrokBridge;
 use alleycat_droid_bridge::DroidBridge;
 use alleycat_hermes_bridge::{HermesBridge, HermesBridgeConfig};
 use alleycat_opencode_bridge::OpencodeBridge;
@@ -43,6 +44,7 @@ pub enum AgentKind {
     Droid,
     Hermes,
     Devin,
+    Grok,
 }
 
 /// How the daemon talks to `codex app-server`. Selected at startup by probing
@@ -203,12 +205,28 @@ impl AgentManager {
         let devin_bridge: Arc<dyn Bridge> =
             Arc::new(DevinBridge::with_default_db(devin_acp).context("wiring devin bridge")?);
 
+        // Grok is another ACP agent; launch via `grok agent stdio`
+        // (note: unlike Devin we do not assume a sessions.db for thread/list).
+        // All Grok launch knowledge lives in `grok-bridge`.
+        // The daemon and acp-bridge stay unaware of "agent", "stdio", etc.
+        let grok_bridge = GrokBridge::build(
+            snapshot.agents.grok.bin.clone(),
+            snapshot.agents.grok.no_leader,
+            snapshot.agents.grok.model.clone(),
+            snapshot.agents.grok.always_approve,
+            snapshot.agents.grok.reasoning_effort.clone(),
+            Arc::new(LocalLauncher),
+        )
+        .await
+        .context("building grok bridge")?;
+
         let mut bridges: HashMap<AgentKind, Arc<dyn Bridge>> = HashMap::new();
         bridges.insert(AgentKind::Pi, pi_bridge as Arc<dyn Bridge>);
         bridges.insert(AgentKind::Amp, amp_bridge as Arc<dyn Bridge>);
         bridges.insert(AgentKind::Claude, claude_bridge as Arc<dyn Bridge>);
         bridges.insert(AgentKind::Droid, droid_bridge as Arc<dyn Bridge>);
         bridges.insert(AgentKind::Devin, devin_bridge);
+        bridges.insert(AgentKind::Grok, grok_bridge);
 
         let hermes_cfg = &snapshot.agents.hermes;
         let hermes_bridge_cfg = HermesBridgeConfig {
@@ -277,7 +295,7 @@ impl AgentManager {
     /// returns. Without this, the tokio runtime Drop chain is the only
     /// thing keeping `kill_on_drop` honest — and that's not reliable
     /// on process exit, which is how we ended up with multiple
-    /// `devin acp` zombies between restarts.
+    /// `devin acp` / `grok agent stdio` zombies between restarts.
     pub async fn shutdown(&self) {
         for (kind, bridge) in &self.bridges {
             info!(agent = agent_kind_str(*kind), "shutting down bridge");
@@ -303,6 +321,7 @@ impl AgentManager {
                 "droid" => self.droid_available(),
                 "hermes" => self.hermes_available().await,
                 "devin" => self.devin_available(),
+                "grok" => self.grok_available(),
                 _ => false,
             };
             let wire = if manifest.name == "codex" {
@@ -405,6 +424,7 @@ impl AgentManager {
             "droid" => Some("droid"),
             "hermes" => Some("hermes"),
             "devin" => Some("devin"),
+            "grok" => Some("grok"),
             _ => None,
         }
     }
@@ -420,6 +440,7 @@ impl AgentManager {
             "droid" => cfg.agents.droid.enabled,
             "hermes" => cfg.agents.hermes.enabled,
             "devin" => cfg.agents.devin.enabled,
+            "grok" => cfg.agents.grok.enabled,
             _ => false,
         }
     }
@@ -903,6 +924,11 @@ impl AgentManager {
         cfg.agents.devin.enabled && which::which(&cfg.agents.devin.bin).is_ok()
     }
 
+    fn grok_available(&self) -> bool {
+        let cfg = self.config.load();
+        cfg.agents.grok.enabled && which::which(&cfg.agents.grok.bin).is_ok()
+    }
+
     async fn hermes_available(&self) -> bool {
         let (enabled, bin, api_base) = {
             let cfg = self.config.load();
@@ -1256,6 +1282,7 @@ fn agent_kind_from_str(name: &str) -> Option<AgentKind> {
         "droid" => Some(AgentKind::Droid),
         "hermes" => Some(AgentKind::Hermes),
         "devin" => Some(AgentKind::Devin),
+        "grok" => Some(AgentKind::Grok),
         _ => None,
     }
 }
@@ -1269,6 +1296,7 @@ fn agent_kind_str(kind: AgentKind) -> &'static str {
         AgentKind::Droid => "droid",
         AgentKind::Hermes => "hermes",
         AgentKind::Devin => "devin",
+        AgentKind::Grok => "grok",
     }
 }
 
@@ -1282,6 +1310,7 @@ impl crate::config::AgentsConfig {
             AgentKind::Droid => self.droid.enabled,
             AgentKind::Hermes => self.hermes.enabled,
             AgentKind::Devin => self.devin.enabled,
+            AgentKind::Grok => self.grok.enabled,
         }
     }
 }

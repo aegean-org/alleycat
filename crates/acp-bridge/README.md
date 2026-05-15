@@ -1,6 +1,6 @@
 # ACP Bridge for Alleycat
 
-This is a standard [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) bridge for Alleycat that allows communication with any ACP-compliant agent, including Devin and other ACP-compatible agents.
+This is a standard [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) bridge for Alleycat that allows communication with any ACP-compliant agent, including Devin (`devin acp`), Grok (`grok agent stdio`), and other ACP-compatible agents.
 
 ## Overview
 
@@ -94,6 +94,7 @@ The bridge can be configured via environment variables:
 ```bash
 # Set the ACP agent binary (default: devin)
 export ACP_BRIDGE_AGENT_BIN=devin
+# For Grok: export ACP_BRIDGE_AGENT_BIN=grok ; export ACP_BRIDGE_AGENT_ARGS="agent stdio"
 
 # Set the ACP agent arguments (default: acp)
 export ACP_BRIDGE_AGENT_ARGS="acp"
@@ -124,7 +125,7 @@ alleycat-acp-bridge --socket /tmp/acp-bridge.sock
 The ACP bridge is integrated into the Alleycat conformance test suite. To run the ACP conformance test:
 
 ```bash
-# Requires devin (or other ACP agent) on PATH
+# Requires devin (or grok, or other ACP agent) on PATH
 cargo test -p alleycat-bridge-conformance -- conformance_acp -- --ignored --nocapture
 ```
 

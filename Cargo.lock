@@ -76,6 +76,7 @@ dependencies = [
  "alleycat-claude-bridge",
  "alleycat-devin-bridge",
  "alleycat-droid-bridge",
+ "alleycat-grok-bridge",
  "alleycat-hermes-bridge",
  "alleycat-opencode-bridge",
  "alleycat-pi-bridge",
@@ -276,6 +277,21 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "alleycat-grok-bridge"
+version = "0.1.0"
+dependencies = [
+ "alleycat-acp-bridge",
+ "alleycat-bridge-core",
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "rusqlite",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

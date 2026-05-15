@@ -163,6 +163,20 @@ pub const MANIFESTS: &[AgentManifest] = &[
         supports_ssh_bridge: true,
         uses_direct_codex_port: false,
     },
+    AgentManifest {
+        name: "grok",
+        display_name: "Grok",
+        wire: AgentWire::Jsonl,
+        title: Some("Grok"),
+        is_beta: true,
+        sort_order: 8,
+        description: Some("xAI Grok coding agent."),
+        aliases: &["grok-code", "xai-grok", "xai grok"],
+        locks_reasoning_effort_after_activity: false,
+        visible_modes: None,
+        supports_ssh_bridge: true,
+        uses_direct_codex_port: false,
+    },
 ];
 
 pub fn manifest_for(name: &str) -> Option<&'static AgentManifest> {
