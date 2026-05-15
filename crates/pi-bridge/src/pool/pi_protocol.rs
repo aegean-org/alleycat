@@ -685,6 +685,7 @@ pub enum CompactionReason {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "method", rename_all = "snake_case")]
 pub enum ExtensionUiRequest {
+    #[serde(alias = "select")]
     Select {
         id: String,
         title: String,
@@ -692,6 +693,7 @@ pub enum ExtensionUiRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timeout: Option<u64>,
     },
+    #[serde(alias = "confirm")]
     Confirm {
         id: String,
         title: String,
@@ -699,6 +701,7 @@ pub enum ExtensionUiRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timeout: Option<u64>,
     },
+    #[serde(alias = "input")]
     Input {
         id: String,
         title: String,
@@ -707,12 +710,14 @@ pub enum ExtensionUiRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timeout: Option<u64>,
     },
+    #[serde(alias = "editor")]
     Editor {
         id: String,
         title: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         prefill: Option<String>,
     },
+    #[serde(alias = "notify")]
     Notify {
         id: String,
         message: String,
@@ -723,6 +728,7 @@ pub enum ExtensionUiRequest {
         )]
         notify_type: Option<NotifyType>,
     },
+    #[serde(alias = "setStatus")]
     SetStatus {
         id: String,
         #[serde(rename = "statusKey")]
@@ -730,6 +736,7 @@ pub enum ExtensionUiRequest {
         #[serde(rename = "statusText")]
         status_text: Option<String>,
     },
+    #[serde(alias = "setWidget")]
     SetWidget {
         id: String,
         #[serde(rename = "widgetKey")]
@@ -743,14 +750,10 @@ pub enum ExtensionUiRequest {
         )]
         widget_placement: Option<WidgetPlacement>,
     },
-    SetTitle {
-        id: String,
-        title: String,
-    },
-    SetEditorText {
-        id: String,
-        text: String,
-    },
+    #[serde(alias = "setTitle")]
+    SetTitle { id: String, title: String },
+    #[serde(alias = "setEditorText")]
+    SetEditorText { id: String, text: String },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1431,6 +1434,55 @@ mod tests {
             _ => panic!("expected extension_ui_request select"),
         }
         assert_eq!(serde_json::to_value(&event).unwrap(), body);
+    }
+
+    #[test]
+    fn pi_event_extension_ui_request_accepts_camel_case_status_and_widget() {
+        let status = json!({
+            "type":"extension_ui_request",
+            "method":"setStatus",
+            "id":"s1",
+            "statusKey":"speed",
+            "statusText":"idle"
+        });
+        match serde_json::from_value::<PiOutboundMessage>(status).unwrap() {
+            PiOutboundMessage::Event(PiEvent::ExtensionUiRequest(
+                ExtensionUiRequest::SetStatus {
+                    id,
+                    status_key,
+                    status_text,
+                },
+            )) => {
+                assert_eq!(id, "s1");
+                assert_eq!(status_key, "speed");
+                assert_eq!(status_text.as_deref(), Some("idle"));
+            }
+            other => panic!("expected setStatus extension UI request, got {other:?}"),
+        }
+
+        let widget = json!({
+            "type":"extension_ui_request",
+            "method":"setWidget",
+            "id":"w1",
+            "widgetKey":"git-status",
+            "widgetPlacement":"belowEditor"
+        });
+        match serde_json::from_value::<PiOutboundMessage>(widget).unwrap() {
+            PiOutboundMessage::Event(PiEvent::ExtensionUiRequest(
+                ExtensionUiRequest::SetWidget {
+                    id,
+                    widget_key,
+                    widget_lines,
+                    widget_placement,
+                },
+            )) => {
+                assert_eq!(id, "w1");
+                assert_eq!(widget_key, "git-status");
+                assert!(widget_lines.is_none());
+                assert_eq!(widget_placement, Some(WidgetPlacement::BelowEditor));
+            }
+            other => panic!("expected setWidget extension UI request, got {other:?}"),
+        }
     }
 
     #[test]

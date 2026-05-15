@@ -16,6 +16,7 @@
 //! `mock/experimentalMethod` are inlined in `main.rs`'s dispatcher; this
 //! module deliberately does not duplicate them.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -24,6 +25,9 @@ use serde_json::json;
 use crate::codex_proto as p;
 use crate::pool::pi_protocol as pi;
 use crate::state::ConnectionState;
+
+const PI_SETTINGS_PATH_ENV: &str = "PI_AGENT_SETTINGS_PATH";
+const THINKING_SUFFIXES: &[&str] = &["off", "minimal", "low", "medium", "high", "xhigh"];
 
 pub async fn handle_model_list(
     state: &Arc<ConnectionState>,
@@ -54,7 +58,7 @@ async fn fetch_models_via_pool(state: &Arc<ConnectionState>) -> Vec<PiAvailableM
         }
     };
     match fetch_models_from_handle(&handle).await {
-        Ok(models) => models,
+        Ok(models) => filter_models_by_enabled_models(models),
         Err(err) => {
             tracing::warn!(%err, "model/list: get_available_models RPC failed");
             Vec::new()
@@ -125,6 +129,141 @@ fn translate_pi_model(model: &PiAvailableModel, is_default: bool) -> p::Model {
         service_tiers: standard_service_tiers(),
         is_default,
     }
+}
+
+fn filter_models_by_enabled_models(models: Vec<PiAvailableModel>) -> Vec<PiAvailableModel> {
+    let Some(patterns) = enabled_model_patterns_from_settings() else {
+        return models;
+    };
+    let filtered: Vec<PiAvailableModel> = models
+        .iter()
+        .filter(|model| model_matches_enabled_patterns(model, &patterns))
+        .cloned()
+        .collect();
+    tracing::info!(
+        before = models.len(),
+        after = filtered.len(),
+        patterns = patterns.len(),
+        "model/list: applied pi enabledModels filter"
+    );
+    filtered
+}
+
+fn enabled_model_patterns_from_settings() -> Option<Vec<String>> {
+    let path = pi_settings_path()?;
+    let bytes = std::fs::read_to_string(&path).ok()?;
+    let value: Value = serde_json::from_str(&bytes).ok()?;
+    let patterns = value.get("enabledModels")?.as_array()?;
+    Some(
+        patterns
+            .iter()
+            .filter_map(|pattern| pattern.as_str())
+            .map(str::trim)
+            .filter(|pattern| !pattern.is_empty())
+            .map(strip_thinking_suffix)
+            .collect(),
+    )
+}
+
+fn pi_settings_path() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var(PI_SETTINGS_PATH_ENV) {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            return Some(PathBuf::from(trimmed));
+        }
+    }
+    let home = std::env::var_os("HOME")?;
+    Some(PathBuf::from(home).join(".pi/agent/settings.json"))
+}
+
+fn strip_thinking_suffix(pattern: &str) -> String {
+    let Some((head, suffix)) = pattern.rsplit_once(':') else {
+        return pattern.to_string();
+    };
+    if THINKING_SUFFIXES
+        .iter()
+        .any(|known| suffix.eq_ignore_ascii_case(known))
+    {
+        head.to_string()
+    } else {
+        pattern.to_string()
+    }
+}
+
+fn model_matches_enabled_patterns(model: &PiAvailableModel, patterns: &[String]) -> bool {
+    patterns
+        .iter()
+        .any(|pattern| model_matches_enabled_pattern(model, pattern))
+}
+
+fn model_matches_enabled_pattern(model: &PiAvailableModel, pattern: &str) -> bool {
+    let normalized = pattern.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return false;
+    }
+    let refs = model_reference_candidates(model);
+    if normalized.contains('*') || normalized.contains('?') {
+        refs.iter()
+            .any(|candidate| wildcard_match(&normalized, candidate))
+    } else {
+        refs.iter().any(|candidate| candidate == &normalized)
+    }
+}
+
+fn model_reference_candidates(model: &PiAvailableModel) -> Vec<String> {
+    let provider = model.provider.as_deref().unwrap_or("pi");
+    let mut refs = Vec::new();
+    for id in [model.model_id.as_deref(), model.id.as_deref()]
+        .into_iter()
+        .flatten()
+    {
+        push_ref(&mut refs, &format!("{provider}/{id}"));
+        if !id.contains('/') {
+            push_ref(&mut refs, id);
+        }
+        if let Some(tail) = id.rsplit('/').next() {
+            push_ref(&mut refs, &format!("{provider}/{tail}"));
+            push_ref(&mut refs, tail);
+        }
+    }
+    refs
+}
+
+fn push_ref(refs: &mut Vec<String>, value: &str) {
+    let normalized = value.trim().to_ascii_lowercase();
+    if !normalized.is_empty() && !refs.contains(&normalized) {
+        refs.push(normalized);
+    }
+}
+
+fn wildcard_match(pattern: &str, value: &str) -> bool {
+    wildcard_match_bytes(pattern.as_bytes(), value.as_bytes())
+}
+
+fn wildcard_match_bytes(pattern: &[u8], value: &[u8]) -> bool {
+    let (mut p, mut v) = (0, 0);
+    let mut star = None;
+    let mut star_match = 0;
+    while v < value.len() {
+        if p < pattern.len() && (pattern[p] == b'?' || pattern[p] == value[v]) {
+            p += 1;
+            v += 1;
+        } else if p < pattern.len() && pattern[p] == b'*' {
+            star = Some(p);
+            p += 1;
+            star_match = v;
+        } else if let Some(star_idx) = star {
+            p = star_idx + 1;
+            star_match += 1;
+            v = star_match;
+        } else {
+            return false;
+        }
+    }
+    while p < pattern.len() && pattern[p] == b'*' {
+        p += 1;
+    }
+    p == pattern.len()
 }
 
 fn standard_service_tiers() -> Vec<p::ModelServiceTier> {
@@ -272,6 +411,44 @@ mod tests {
         assert_eq!(parsed[0].provider.as_deref(), Some("anthropic"));
         assert_eq!(parsed[0].model_id.as_deref(), Some("claude-sonnet-4-6"));
         assert_eq!(parsed[1].id.as_deref(), Some("gpt-5"));
+    }
+
+    #[test]
+    fn enabled_model_filter_matches_full_ids_suffixes_and_globs() {
+        let model = PiAvailableModel {
+            provider: Some("fireworks".into()),
+            model_id: Some("accounts/fireworks/models/deepseek-v4-pro".into()),
+            ..Default::default()
+        };
+        assert!(model_matches_enabled_pattern(
+            &model,
+            "fireworks/accounts/fireworks/models/deepseek-v4-pro"
+        ));
+        assert!(!model_matches_enabled_pattern(
+            &model,
+            "opencode-go/deepseek-v4-pro"
+        ));
+        assert!(model_matches_enabled_pattern(
+            &model,
+            "fireworks/*deepseek-v4*"
+        ));
+        assert!(!model_matches_enabled_pattern(
+            &model,
+            "accounts/fireworks/models/deepseek-v4-pro"
+        ));
+        assert!(!model_matches_enabled_pattern(&model, "openai/gpt-5"));
+    }
+
+    #[test]
+    fn strip_thinking_suffix_leaves_colon_model_ids_alone() {
+        assert_eq!(
+            strip_thinking_suffix("anthropic/sonnet:high"),
+            "anthropic/sonnet"
+        );
+        assert_eq!(
+            strip_thinking_suffix("openrouter/model:exacto"),
+            "openrouter/model:exacto"
+        );
     }
 
     #[test]
