@@ -1347,9 +1347,9 @@ fn has_factory_auth(api_key_env: &str) -> bool {
     let Some(home) = std::env::var_os("HOME") else {
         return false;
     };
-    PathBuf::from(home)
-        .join(".factory/auth.encrypted")
-        .is_file()
+    let factory_dir = PathBuf::from(home).join(".factory");
+    factory_dir.join("auth.encrypted").is_file()
+        || (factory_dir.join("auth.v2.file").is_file() && factory_dir.join("auth.v2.key").is_file())
 }
 
 fn has_amp_auth(api_key_env: &str) -> bool {
@@ -1369,6 +1369,24 @@ fn has_amp_auth(api_key_env: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn factory_auth_accepts_v2_store() {
+        let home = crate::test_support::TempHome::new();
+        let factory_dir = home.path().join(".factory");
+        std::fs::create_dir_all(&factory_dir).unwrap();
+
+        let api_key_env = "ALLEYCAT_TEST_FACTORY_API_KEY_UNSET";
+        unsafe { std::env::remove_var(api_key_env) };
+
+        assert!(!has_factory_auth(api_key_env));
+
+        std::fs::write(factory_dir.join("auth.v2.file"), b"auth").unwrap();
+        assert!(!has_factory_auth(api_key_env));
+
+        std::fs::write(factory_dir.join("auth.v2.key"), b"key").unwrap();
+        assert!(has_factory_auth(api_key_env));
+    }
 
     #[test]
     fn codex_windows_cmd_shell_detection_is_limited_to_codex_shims() {
