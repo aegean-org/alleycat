@@ -8,9 +8,10 @@
 //! internals, every spawn is routed through the [`ProcessLauncher`] trait
 //! defined here.
 //!
-//! [`LocalLauncher`] is the default implementation and preserves the daemon's
-//! current behavior bit-for-bit: it wraps `tokio::process::Command` with
-//! `kill_on_drop(true)` so a dropped child doesn't outlive the bridge.
+//! [`LocalLauncher`] is the default implementation. It wraps
+//! `tokio::process::Command` with `kill_on_drop(true)` so a dropped child
+//! doesn't outlive the bridge, and suppresses visible console windows for
+//! detached Windows daemons.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -141,10 +142,18 @@ impl ProcessLauncher for LocalLauncher {
             cmd.stdout(spec.stdout.to_std());
             cmd.stderr(spec.stderr.to_std());
             cmd.kill_on_drop(true);
+            #[cfg(windows)]
+            hide_windows_console(&mut cmd);
             let child = cmd.spawn()?;
             Ok(Box::new(LocalChild { inner: child }) as Box<dyn ChildProcess>)
         })
     }
+}
+
+#[cfg(windows)]
+fn hide_windows_console(command: &mut Command) {
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
 }
 
 struct LocalChild {

@@ -501,8 +501,7 @@ impl AgentManager {
     async fn stop_codex_child(&self) -> bool {
         let mut guard = self.codex_child.lock().await;
         if let Some(mut child) = guard.take() {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
+            terminate_codex_child(&mut child, "app-server").await;
             info!("codex app-server child stopped");
             return true;
         }
@@ -560,7 +559,8 @@ impl AgentManager {
 
         let mut child_io = tokio::io::join(stdout, stdin);
         let _ = tokio::io::copy_bidirectional(&mut iroh_stream, &mut child_io).await;
-        let _ = child.wait().await;
+        drop(child_io);
+        reap_codex_stream_child(child, "app-server proxy").await;
         Ok(())
     }
 
@@ -684,8 +684,7 @@ impl AgentManager {
             match child.try_wait() {
                 Ok(None) => {
                     if let Some(mut child) = guard.take() {
-                        let _ = child.kill().await;
-                        let _ = child.wait().await;
+                        terminate_codex_child(&mut child, "app-server").await;
                         info!("restarting codex app-server child after failed proxy probe");
                     }
                 }
@@ -789,7 +788,8 @@ impl AgentManager {
 
         let mut child_io = tokio::io::join(stdout, stdin);
         let _ = tokio::io::copy_bidirectional(&mut iroh_stream, &mut child_io).await;
-        let _ = child.wait().await;
+        drop(child_io);
+        reap_codex_stream_child(child, "app-server stdio").await;
         Ok(())
     }
 
@@ -970,6 +970,62 @@ async fn hermes_api_available(api_base: &str) -> bool {
     )
 }
 
+async fn reap_codex_stream_child(mut child: Child, label: &'static str) {
+    match tokio::time::timeout(Duration::from_millis(500), child.wait()).await {
+        Ok(Ok(_)) => return,
+        Ok(Err(error)) => {
+            warn!(target: "codex", "waiting for {label} child failed: {error}");
+            return;
+        }
+        Err(_) => {}
+    }
+
+    terminate_codex_child(&mut child, label).await;
+}
+
+async fn terminate_codex_child(child: &mut Child, label: &'static str) {
+    terminate_codex_child_tree(child, label).await;
+    wait_for_codex_child_exit(child, label).await;
+}
+
+async fn terminate_codex_child_tree(child: &mut Child, label: &'static str) {
+    #[cfg(windows)]
+    if let Some(pid) = child.id() {
+        let mut taskkill = Command::new("taskkill.exe");
+        taskkill
+            .arg("/PID")
+            .arg(pid.to_string())
+            .arg("/T")
+            .arg("/F")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        hide_windows_console(&mut taskkill);
+
+        match tokio::time::timeout(Duration::from_secs(5), taskkill.status()).await {
+            Ok(Ok(status)) if status.success() => return,
+            Ok(Ok(status)) => {
+                warn!(target: "codex", "{label} taskkill exited with {status}");
+            }
+            Ok(Err(error)) => {
+                warn!(target: "codex", "failed to run taskkill for {label}: {error}");
+            }
+            Err(_) => {
+                warn!(target: "codex", "timed out running taskkill for {label}");
+            }
+        }
+    }
+
+    let _ = child.kill().await;
+}
+
+async fn wait_for_codex_child_exit(child: &mut Child, label: &'static str) {
+    match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
+        Ok(Ok(_)) | Ok(Err(_)) => {}
+        Err(_) => warn!(target: "codex", "{label} child did not exit after termination"),
+    }
+}
+
 fn codex_command(bin: &Path) -> Command {
     #[cfg(windows)]
     if codex_needs_windows_cmd_shell(bin) {
@@ -977,10 +1033,20 @@ fn codex_command(bin: &Path) -> Command {
             std::env::var_os("ComSpec").unwrap_or_else(|| std::ffi::OsString::from("cmd.exe"));
         let mut command = Command::new(shell);
         command.arg("/d").arg("/c").arg(bin);
+        hide_windows_console(&mut command);
         return command;
     }
 
-    Command::new(bin)
+    let mut command = Command::new(bin);
+    #[cfg(windows)]
+    hide_windows_console(&mut command);
+    command
+}
+
+#[cfg(windows)]
+fn hide_windows_console(command: &mut Command) {
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -1226,16 +1292,15 @@ async fn probe_codex_app_server_proxy(
     )
     .await;
 
-    let _ = child.kill().await;
-    let _ = child.wait().await;
-
-    match result {
+    let result = match result {
         Ok(Ok(_)) => Ok(()),
         Ok(Err(error)) => Err(error).context("codex app-server proxy websocket handshake failed"),
         Err(_) => Err(anyhow!(
             "timed out opening websocket over codex app-server proxy"
         )),
-    }
+    };
+    terminate_codex_child(&mut child, "app-server proxy probe").await;
+    result
 }
 
 #[cfg(unix)]
