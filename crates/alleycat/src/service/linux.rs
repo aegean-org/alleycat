@@ -154,7 +154,22 @@ fn render_systemd_unit(
 }
 
 fn systemd_escape(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '%' => escaped.push_str("%%"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            ch if ch.is_control() && (ch as u32) <= 0xff => {
+                escaped.push_str(&format!("\\x{:02x}", ch as u32));
+            }
+            ch => escaped.push(ch),
+        }
+    }
+    escaped
 }
 
 fn render_autostart_desktop(exe: &Path) -> String {
@@ -299,6 +314,15 @@ mod tests {
         assert!(body.contains("Environment=\"PATH=/home/me/.local/bin:/usr/local/bin:/usr/bin\""));
         assert!(body.contains("Environment=\"SHELL=/usr/bin/fish\""));
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn systemd_escape_handles_special_environment_values() {
+        let raw = "prefix:\\/home/claude/%h/bin:\"quoted\"\nnext\tend\x07";
+        assert_eq!(
+            systemd_escape(raw),
+            "prefix:\\\\/home/claude/%%h/bin:\\\"quoted\\\"\\nnext\\tend\\x07"
+        );
     }
 
     #[test]
