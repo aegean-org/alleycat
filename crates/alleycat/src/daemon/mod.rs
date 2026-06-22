@@ -56,6 +56,7 @@ pub async fn run() -> anyhow::Result<()> {
     let initial_config = crate::config::load_or_init()
         .await
         .context("loading host config")?;
+    let initial_relay = initial_config.relay.clone();
     let config = Arc::new(ArcSwap::from_pointee(initial_config));
 
     let secret_key = state::load_or_create_secret_key()
@@ -64,7 +65,7 @@ pub async fn run() -> anyhow::Result<()> {
     let node_id = secret_key.public().to_string();
     info!(node_id = %node_id, "loaded persistent identity");
 
-    let endpoint = host::bind_endpoint(secret_key.clone()).await?;
+    let endpoint = host::bind_endpoint(secret_key.clone(), initial_relay.as_deref()).await?;
     let agents = AgentManager::new(Arc::clone(&config))
         .await
         .context("initializing agent manager")?;
@@ -196,7 +197,10 @@ async fn handle_status(daemon: &DaemonState) -> Response {
         pid: std::process::id(),
         node_id: daemon.node_id.clone(),
         token_short: token_fingerprint(&cfg.token),
-        relay: host::endpoint_home_relay(Some(&daemon.endpoint)).or_else(|| cfg.relay.clone()),
+        relay: cfg
+            .relay
+            .clone()
+            .or_else(|| host::endpoint_home_relay(Some(&daemon.endpoint))),
         config_path: paths::host_config_file()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| "<unknown>".to_string()),
@@ -246,6 +250,9 @@ async fn handle_reload(daemon: &DaemonState) -> Response {
         Ok(c) => c,
         Err(error) => return Response::err(format!("loading config: {error:#}")),
     };
+    if new_cfg.relay != daemon.config.load().relay {
+        return Response::err("relay changes require restarting the daemon".to_string());
+    }
     daemon.config.store(Arc::new(new_cfg));
     Response::ok()
 }

@@ -5,7 +5,7 @@ use anyhow::{Context, anyhow};
 use arc_swap::ArcSwap;
 use iroh::endpoint::QuicTransportConfig;
 use iroh::endpoint::{IdleTimeout, presets};
-use iroh::{Endpoint, SecretKey};
+use iroh::{Endpoint, RelayMap, RelayMode, RelayUrl, SecretKey};
 use tokio::sync::Notify;
 use tracing::{info, warn};
 
@@ -18,7 +18,7 @@ use crate::stream::IrohStream;
 /// Bind the iroh endpoint with the given identity and ALPN, returning it
 /// ready to be passed to [`accept_loop`]. Spawns a background "online" probe
 /// that logs when the endpoint reports relay connectivity.
-pub async fn bind_endpoint(secret_key: SecretKey) -> anyhow::Result<Endpoint> {
+pub async fn bind_endpoint(secret_key: SecretKey, relay: Option<&str>) -> anyhow::Result<Endpoint> {
     // iroh defaults already PING every 5s (HEARTBEAT_INTERVAL) which would
     // normally keep the connection alive — but the connection-wide
     // `max_idle_timeout` is still 30s by default, and once the holepunched
@@ -34,13 +34,15 @@ pub async fn bind_endpoint(secret_key: SecretKey) -> anyhow::Result<Endpoint> {
         .max_idle_timeout(Some(idle_timeout))
         .build();
 
-    let endpoint = Endpoint::builder(presets::N0)
+    let mut builder = Endpoint::builder(presets::N0)
         .secret_key(secret_key)
         .alpns(vec![ALLEYCAT_ALPN.to_vec()])
-        .transport_config(transport)
-        .bind()
-        .await
-        .context("binding iroh endpoint")?;
+        .transport_config(transport);
+    if let Some(relay_mode) = relay_mode_from_config(relay)? {
+        builder = builder.relay_mode(relay_mode);
+    }
+
+    let endpoint = builder.bind().await.context("binding iroh endpoint")?;
 
     info!(node_id = %endpoint.id(), "alleycat endpoint bound");
     let endpoint_for_online = endpoint.clone();
@@ -56,6 +58,17 @@ pub async fn bind_endpoint(secret_key: SecretKey) -> anyhow::Result<Endpoint> {
     });
 
     Ok(endpoint)
+}
+
+fn relay_mode_from_config(relay: Option<&str>) -> anyhow::Result<Option<RelayMode>> {
+    relay
+        .map(|relay| {
+            let relay_url = relay
+                .parse::<RelayUrl>()
+                .with_context(|| format!("parsing relay URL {relay:?}"))?;
+            Ok(RelayMode::Custom(RelayMap::from(relay_url)))
+        })
+        .transpose()
 }
 
 /// Run the iroh accept loop until `shutdown` fires or the endpoint stops
@@ -245,13 +258,14 @@ pub fn pair_payload(
         node_id: secret_key.public().to_string(),
         token: config.token.clone(),
         host_name: local_host_name(),
-        relay: endpoint_home_relay(endpoint).or_else(|| config.relay.clone()),
+        relay: config
+            .relay
+            .clone()
+            .or_else(|| endpoint_home_relay(endpoint)),
     }
 }
 
-/// Read the iroh endpoint's currently-known home relay, if any. Pair payloads
-/// prefer this over the static config so phones can dial the host even when
-/// pkarr/DNS publishing is broken (e.g. IPv6-only relays + Tailscale).
+/// Read the iroh endpoint's currently-known home relay, if any.
 pub fn endpoint_home_relay(endpoint: Option<&Endpoint>) -> Option<String> {
     endpoint?
         .addr()
@@ -315,6 +329,41 @@ mod tests {
                 .as_deref()
                 .is_some_and(|name| !name.is_empty())
         );
+    }
+
+    #[test]
+    fn pair_payload_prefers_configured_relay() {
+        let secret_key = iroh::SecretKey::generate();
+        let config = HostConfig {
+            token: "token-1".to_string(),
+            relay: Some("https://relay.example".to_string()),
+            agents: AgentsConfig::default(),
+            session: crate::config::SessionConfig::default(),
+        };
+
+        let payload = pair_payload(&secret_key, &config, None);
+
+        assert_eq!(payload.relay.as_deref(), Some("https://relay.example"));
+    }
+
+    #[test]
+    fn configured_relay_builds_custom_relay_mode() {
+        let relay_mode = relay_mode_from_config(Some("https://relay.example"))
+            .expect("relay mode")
+            .expect("configured relay");
+
+        let relay_map = relay_mode.relay_map();
+        let relays = relay_map.urls::<Vec<_>>();
+
+        assert_eq!(relays.len(), 1);
+        assert_eq!(relays[0].as_str(), "https://relay.example/");
+    }
+
+    #[test]
+    fn invalid_configured_relay_is_rejected() {
+        let err = relay_mode_from_config(Some("not-a-url")).unwrap_err();
+
+        assert!(err.to_string().contains("parsing relay URL"));
     }
 
     #[test]

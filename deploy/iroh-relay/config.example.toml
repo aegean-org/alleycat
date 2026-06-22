@@ -1,0 +1,5 @@
+enable_relay = true
+http_bind_addr = "[::]:8080"
+enable_quic_addr_discovery = false
+enable_metrics = true
+metrics_bind_addr = "[::]:9090"

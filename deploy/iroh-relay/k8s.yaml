@@ -1,0 +1,115 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: necode-relay
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: iroh-relay-config
+  namespace: necode-relay
+data:
+  config.toml: |
+    enable_relay = true
+    http_bind_addr = "[::]:8080"
+    enable_quic_addr_discovery = false
+    enable_metrics = true
+    metrics_bind_addr = "[::]:9090"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: iroh-relay
+  namespace: necode-relay
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: iroh-relay
+  template:
+    metadata:
+      labels:
+        app: iroh-relay
+    spec:
+      containers:
+        - name: iroh-relay
+          image: registry.example.com/necode/iroh-relay:0.98.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config-path
+            - /etc/iroh-relay/config.toml
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /etc/iroh-relay
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /generate_204
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /generate_204
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+      volumes:
+        - name: config
+          configMap:
+            name: iroh-relay-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: iroh-relay-http
+  namespace: necode-relay
+spec:
+  type: ClusterIP
+  selector:
+    app: iroh-relay
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: iroh-relay
+  namespace: necode-relay
+spec:
+  rules:
+    - host: relay.inoteexpress.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: iroh-relay-http
+                port:
+                  number: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: iroh-relay-metrics
+  namespace: necode-relay
+spec:
+  type: ClusterIP
+  selector:
+    app: iroh-relay
+  ports:
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+      protocol: TCP
