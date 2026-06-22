@@ -50,6 +50,7 @@ pub enum AgentKind {
     Hermes,
     Devin,
     Grok,
+    Necode,
     Shell,
 }
 
@@ -231,6 +232,13 @@ impl AgentManager {
         .await
         .context("building grok bridge")?;
 
+        let necode_bridge = AcpBridge::builder()
+            .agent_bin(PathBuf::from(&snapshot.agents.necode.bin))
+            .launcher(Arc::clone(&launcher))
+            .build()
+            .await
+            .context("building necode bridge")?;
+
         let shell_cfg = &snapshot.agents.shell;
         let mut shell_builder = ShellBridge::builder()
             .shell_bin(shell_cfg.shell_bin.clone())
@@ -247,6 +255,7 @@ impl AgentManager {
         bridges.insert(AgentKind::Droid, droid_bridge as Arc<dyn Bridge>);
         bridges.insert(AgentKind::Devin, devin_bridge);
         bridges.insert(AgentKind::Grok, grok_bridge);
+        bridges.insert(AgentKind::Necode, necode_bridge);
         bridges.insert(AgentKind::Shell, shell_bridge);
 
         let hermes_cfg = &snapshot.agents.hermes;
@@ -345,6 +354,7 @@ impl AgentManager {
                 "hermes" => self.hermes_available(&launch_env).await,
                 "devin" => self.devin_available(&launch_env),
                 "grok" => self.grok_available(&launch_env),
+                "necode" => self.necode_available(&launch_env),
                 "shell" => self.shell_available(),
                 _ => false,
             };
@@ -449,6 +459,7 @@ impl AgentManager {
             "hermes" => Some("hermes"),
             "devin" => Some("devin"),
             "grok" => Some("grok"),
+            "necode" => Some("necode"),
             "shell" => Some("shell"),
             _ => None,
         }
@@ -466,6 +477,7 @@ impl AgentManager {
             "hermes" => cfg.agents.hermes.enabled,
             "devin" => cfg.agents.devin.enabled,
             "grok" => cfg.agents.grok.enabled,
+            "necode" => cfg.agents.necode.enabled,
             "shell" => cfg.agents.shell.enabled,
             _ => false,
         }
@@ -981,6 +993,11 @@ impl AgentManager {
         cfg.agents.grok.enabled && program_available(env, &cfg.agents.grok.bin)
     }
 
+    fn necode_available(&self, env: &LaunchEnvironment) -> bool {
+        let cfg = self.config.load();
+        cfg.agents.necode.enabled && program_available(env, &cfg.agents.necode.bin)
+    }
+
     fn shell_available(&self) -> bool {
         let cfg = self.config.load();
         cfg.agents.shell.enabled && which::which(&cfg.agents.shell.shell_bin).is_ok()
@@ -1439,6 +1456,7 @@ fn agent_kind_from_str(name: &str) -> Option<AgentKind> {
         "hermes" => Some(AgentKind::Hermes),
         "devin" => Some(AgentKind::Devin),
         "grok" => Some(AgentKind::Grok),
+        "necode" => Some(AgentKind::Necode),
         "shell" => Some(AgentKind::Shell),
         _ => None,
     }
@@ -1454,6 +1472,7 @@ fn agent_kind_str(kind: AgentKind) -> &'static str {
         AgentKind::Hermes => "hermes",
         AgentKind::Devin => "devin",
         AgentKind::Grok => "grok",
+        AgentKind::Necode => "necode",
         AgentKind::Shell => "shell",
     }
 }
@@ -1469,6 +1488,7 @@ impl crate::config::AgentsConfig {
             AgentKind::Hermes => self.hermes.enabled,
             AgentKind::Devin => self.devin.enabled,
             AgentKind::Grok => self.grok.enabled,
+            AgentKind::Necode => self.necode.enabled,
             AgentKind::Shell => self.shell.enabled,
         }
     }

@@ -762,7 +762,7 @@ impl Bridge for AcpBridge {
                 } else {
                     decode(params)?
                 };
-                handlers::handle_thread_list(&client, typed).await
+                handlers::handle_thread_list(&ctx.session().agent, &client, typed).await
             }
             "thread/start" => handlers::handle_thread_start(ctx, self, &client, params).await,
             "thread/resume" => handlers::handle_thread_resume(ctx, self, &client, params).await,

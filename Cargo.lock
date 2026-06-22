@@ -255,6 +255,7 @@ dependencies = [
  "alleycat-bridge-core",
  "anyhow",
  "async-trait",
+ "directories",
  "rusqlite",
  "serde_json",
  "tempfile",

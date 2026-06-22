@@ -65,6 +65,7 @@ pub struct AgentsConfig {
     pub hermes: HermesAgentConfig,
     pub devin: DevinAgentConfig,
     pub grok: GrokAgentConfig,
+    pub necode: NecodeAgentConfig,
     pub shell: ShellAgentConfig,
 }
 
@@ -262,6 +263,22 @@ impl Default for GrokAgentConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
+pub struct NecodeAgentConfig {
+    pub enabled: bool,
+    pub bin: String,
+}
+
+impl Default for NecodeAgentConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            bin: "necode".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct ShellAgentConfig {
     pub enabled: bool,
     pub shell_bin: String,
@@ -398,6 +415,8 @@ mod tests {
             config.agents.grok.reasoning_effort.as_deref(),
             Some("medium")
         );
+        assert!(config.agents.necode.enabled);
+        assert_eq!(config.agents.necode.bin, "necode");
         assert!(config.agents.shell.enabled);
     }
 }

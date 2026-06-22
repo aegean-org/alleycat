@@ -5,7 +5,7 @@ use serde_json::Value;
 /// Translate Codex InitializeParams to ACP InitializeRequest.
 pub fn codex_to_acp_initialize(codex_params: &Value) -> Result<Value, anyhow::Error> {
     let acp_request = serde_json::json!({
-        "protocolVersion": "1.0.0",
+        "protocolVersion": 1,
         "clientCapabilities": {
             "fs": {
                 "readTextFile": true,
@@ -64,7 +64,7 @@ pub fn codex_to_acp_new_session(codex_params: &Value) -> Result<Value, anyhow::E
     let cwd = codex_params
         .get("cwd")
         .and_then(|v| v.as_str())
-        .filter(|s| s.starts_with('/'))
+        .filter(|s| is_absolute_cwd(s))
         .unwrap_or("/");
 
     let acp_request = serde_json::json!({
@@ -72,6 +72,10 @@ pub fn codex_to_acp_new_session(codex_params: &Value) -> Result<Value, anyhow::E
         "mcpServers": [],
     });
     Ok(acp_request)
+}
+
+fn is_absolute_cwd(path: &str) -> bool {
+    std::path::Path::new(path).is_absolute() || path.starts_with('/')
 }
 
 /// Translate ACP NewSessionResponse to Codex ThreadStartResponse.

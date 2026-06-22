@@ -16,7 +16,7 @@ fn test_codex_to_acp_initialize() {
     assert!(acp_request.is_ok());
 
     let acp_request = acp_request.unwrap();
-    assert_eq!(acp_request["protocolVersion"], "1.0.0");
+    assert_eq!(acp_request["protocolVersion"], 1);
     assert_eq!(acp_request["clientInfo"]["name"], "TestClient");
     assert_eq!(acp_request["clientInfo"]["version"], "1.0.0");
 }
@@ -24,7 +24,7 @@ fn test_codex_to_acp_initialize() {
 #[test]
 fn test_acp_to_codex_initialize_result() {
     let acp_response = serde_json::json!({
-        "protocolVersion": "1.0.0",
+        "protocolVersion": 1,
         "agentInfo": {
             "name": "TestAgent",
             "version": "2.0.0",
@@ -43,8 +43,9 @@ fn test_acp_to_codex_initialize_result() {
     assert!(codex_result.is_ok());
 
     let codex_result = codex_result.unwrap();
-    assert_eq!(codex_result["serverInfo"]["name"], "TestAgent");
-    assert_eq!(codex_result["serverInfo"]["version"], "2.0.0");
+    let user_agent = codex_result["userAgent"].as_str().expect("userAgent");
+    assert!(user_agent.contains("TestAgent 2.0.0"));
+    assert!(codex_result["codexHome"].is_string());
 }
 
 #[test]
@@ -58,6 +59,20 @@ fn test_codex_to_acp_new_session() {
 
     let acp_request = acp_request.unwrap();
     assert_eq!(acp_request["cwd"], "/home/user/project");
+}
+
+#[cfg(windows)]
+#[test]
+fn test_codex_to_acp_new_session_accepts_windows_absolute_cwd() {
+    let codex_params = serde_json::json!({
+        "cwd": "D:\\project\\oh-my-pi",
+    });
+
+    let acp_request = alleycat_acp_bridge::translate::codex_to_acp_new_session(&codex_params);
+    assert!(acp_request.is_ok());
+
+    let acp_request = acp_request.unwrap();
+    assert_eq!(acp_request["cwd"], "D:\\project\\oh-my-pi");
 }
 
 #[test]

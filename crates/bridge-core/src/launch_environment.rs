@@ -69,11 +69,11 @@ impl LaunchEnvironment {
     }
 
     pub fn get(&self, key: &str) -> Option<&OsStr> {
-        self.vars.get(OsStr::new(key)).map(OsString::as_os_str)
+        env_get(&self.vars, key).map(OsString::as_os_str)
     }
 
     pub fn contains_key(&self, key: &str) -> bool {
-        self.vars.contains_key(OsStr::new(key))
+        env_get(&self.vars, key).is_some()
     }
 
     pub fn find_on_path(&self, program: &str) -> Option<PathBuf> {
@@ -471,7 +471,7 @@ fn is_valid_env_key(key: &str) -> bool {
 
 fn find_provider_on_path(program: &str, env: &EnvMap, fallback_paths: &[&str]) -> Option<PathBuf> {
     find_on_path(program, env).or_else(|| {
-        let home = env.get(OsStr::new("HOME")).map(PathBuf::from);
+        let home = env_get(env, "HOME").map(PathBuf::from);
         fallback_paths.iter().find_map(|candidate| {
             let path = PathBuf::from(candidate);
             let path = if path.is_absolute() {
@@ -485,23 +485,66 @@ fn find_provider_on_path(program: &str, env: &EnvMap, fallback_paths: &[&str]) -
 }
 
 fn find_on_path(program: &str, env: &EnvMap) -> Option<PathBuf> {
-    let path = env.get(OsStr::new("PATH"))?;
+    let path = env_get(env, "PATH")?;
+    #[cfg(windows)]
+    let has_extension = Path::new(program).extension().is_some();
+
     for dir in std::env::split_paths(path) {
-        let candidate = dir.join(program);
-        if is_executable_file(&candidate) {
-            return Some(candidate);
-        }
         #[cfg(windows)]
-        {
-            for ext in ["exe", "cmd", "bat"] {
-                let candidate = dir.join(format!("{program}.{ext}"));
+        if !has_extension {
+            for ext in windows_path_extensions(env) {
+                let candidate = dir.join(format!("{program}{ext}"));
                 if is_executable_file(&candidate) {
                     return Some(candidate);
                 }
             }
         }
+
+        let candidate = dir.join(program);
+        if is_executable_file(&candidate) {
+            return Some(candidate);
+        }
     }
     None
+}
+
+#[cfg(windows)]
+fn windows_path_extensions(env: &EnvMap) -> Vec<String> {
+    let pathext = env_get(env, "PATHEXT")
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(".COM;.EXE;.BAT;.CMD");
+    pathext
+        .split(';')
+        .filter_map(|ext| {
+            let trimmed = ext.trim();
+            if trimmed.is_empty() {
+                None
+            } else if trimmed.starts_with('.') {
+                Some(trimmed.to_string())
+            } else {
+                Some(format!(".{trimmed}"))
+            }
+        })
+        .collect()
+}
+
+fn env_get<'a>(env: &'a EnvMap, key: &str) -> Option<&'a OsString> {
+    if let Some(value) = env.get(OsStr::new(key)) {
+        return Some(value);
+    }
+
+    #[cfg(windows)]
+    {
+        env.iter()
+            .find(|(candidate, _)| candidate.to_string_lossy().eq_ignore_ascii_case(key))
+            .map(|(_, value)| value)
+    }
+
+    #[cfg(not(windows))]
+    {
+        None
+    }
 }
 
 fn is_executable_file(path: &Path) -> bool {
@@ -612,6 +655,56 @@ mod tests {
         assert_eq!(
             find_on_path("agent", &env).as_deref(),
             Some(executable.as_path())
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn find_on_path_uses_windows_case_insensitive_path_key() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let agent = temp.path().join("agent.cmd");
+        std::fs::write(&agent, "@echo off\r\n").expect("write agent");
+
+        let mut env = EnvMap::new();
+        env.insert(
+            OsString::from("Path"),
+            temp.path().as_os_str().to_os_string(),
+        );
+
+        let found = find_on_path("agent", &env).expect("agent on path");
+        assert_eq!(found.file_stem().and_then(|s| s.to_str()), Some("agent"));
+        assert_eq!(
+            found
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(str::to_ascii_lowercase),
+            Some("cmd".to_string())
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn find_on_path_prefers_pathext_shim_over_extensionless_file() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let extensionless = temp.path().join("agent");
+        let shim = temp.path().join("agent.cmd");
+        std::fs::write(&extensionless, "#!/bin/sh\n").expect("write extensionless");
+        std::fs::write(&shim, "@echo off\r\n").expect("write shim");
+
+        let mut env = EnvMap::new();
+        env.insert(
+            OsString::from("Path"),
+            temp.path().as_os_str().to_os_string(),
+        );
+
+        let found = find_on_path("agent", &env).expect("agent on path");
+        assert_eq!(found.file_stem().and_then(|s| s.to_str()), Some("agent"));
+        assert_eq!(
+            found
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(str::to_ascii_lowercase),
+            Some("cmd".to_string())
         );
     }
 

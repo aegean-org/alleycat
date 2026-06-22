@@ -26,8 +26,8 @@ use tracing::warn;
 /// Default location of devin's SQLite session store on every platform the
 /// devin CLI supports today.
 pub fn default_sessions_db() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".local/share/devin/cli/sessions.db"))
+    let base = directories::BaseDirs::new()?;
+    Some(base.home_dir().join(".local/share/devin/cli/sessions.db"))
 }
 
 pub struct DevinBridge {
@@ -42,7 +42,7 @@ impl DevinBridge {
 
     pub fn with_default_db(inner: Arc<AcpBridge>) -> Result<Self> {
         let path =
-            default_sessions_db().context("could not determine $HOME for devin sessions.db")?;
+            default_sessions_db().context("could not determine home for devin sessions.db")?;
         Ok(Self::new(inner, path))
     }
 

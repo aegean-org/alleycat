@@ -1,5 +1,6 @@
 //! Handlers for Codex protocol methods.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use alleycat_bridge_core::{JsonRpcError, error_codes};
@@ -17,9 +18,13 @@ use crate::translate;
 /// the request.
 fn coerce_absolute_cwd(cwd: Option<&str>) -> &str {
     match cwd {
-        Some(p) if p.starts_with('/') => p,
+        Some(p) if is_absolute_cwd(p) => p,
         _ => "/",
     }
+}
+
+fn is_absolute_cwd(path: &str) -> bool {
+    Path::new(path).is_absolute() || path.starts_with('/')
 }
 
 /// Handle initialize request.
@@ -408,6 +413,7 @@ pub async fn handle_thread_start(
 
 /// Handle thread/list request.
 pub async fn handle_thread_list(
+    agent_id: &str,
     client: &Arc<AcpClient>,
     _params: p::ThreadListParams,
 ) -> Result<Value, JsonRpcError> {
@@ -439,7 +445,7 @@ pub async fn handle_thread_list(
                         "forkedFromId": null,
                         "preview": name,
                         "ephemeral": false,
-                        "modelProvider": "acp",
+                        "modelProvider": agent_id,
                         "createdAt": created_at,
                         "updatedAt": updated_at,
                         "status": { "type": "idle" },
