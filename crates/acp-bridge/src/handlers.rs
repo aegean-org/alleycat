@@ -656,16 +656,16 @@ fn thread_timestamps(turns: &[crate::bridge::StoredTurn]) -> (i64, i64) {
 /// Translate codex `UserInput[]` into ACP `ContentBlock[]` for `session/prompt`.
 ///
 /// Mapping (per https://agentclientprotocol.com/protocol/content):
-/// * `Text` → `{type: "text", text}`
-/// * `Image{url}` → `{type: "image", uri: url}` (preferred over the
-///   base64 form when we already have a URI)
-/// * `LocalImage{path}` → read the file, base64-encode, emit
-///   `{type: "image", mimeType, data}`. If the file can't be read, fall
-///   back to a `resource_link` so the reference isn't lost entirely.
-/// * `Skill{name}` → `{type: "text", text: "/{name}"}` so the agent sees
-///   it as a slash command. ACP has no first-class skill block.
-/// * `Mention{name, path}` → text `@{name}` plus a `resource_link` to
-///   the path so the agent can resolve the reference.
+/// * `Text` -> `{type: "text", text}`
+/// * `Image{url}` -> embedded image `resource` for data URIs, otherwise
+///   a named `resource_link`.
+/// * `LocalImage{path}` -> read the file, base64-encode, emit an
+///   embedded image `resource`. If the file can't be read, fall back to
+///   a named `resource_link` so the reference isn't lost entirely.
+/// * `Skill{name}` -> `{type: "text", text: "/{name}"}` so the agent
+///   sees it as a slash command. ACP has no first-class skill block.
+/// * `Mention{name, path}` -> text `@{name}` plus a named
+///   `resource_link` to the path so the agent can resolve the reference.
 fn user_input_to_acp_prompt(input: &[p::UserInput]) -> Vec<Value> {
     let mut blocks = Vec::new();
     for item in input {
@@ -674,15 +674,12 @@ fn user_input_to_acp_prompt(input: &[p::UserInput]) -> Vec<Value> {
                 blocks.push(json!({"type": "text", "text": text}));
             }
             p::UserInput::Image { url } => {
-                blocks.push(json!({"type": "image", "uri": url}));
+                blocks.push(acp_image_url_block(url));
             }
             p::UserInput::LocalImage { path } => match encode_local_image(path) {
                 Ok((mime, data)) => {
-                    blocks.push(json!({
-                        "type": "image",
-                        "mimeType": mime,
-                        "data": data,
-                    }));
+                    let uri = format!("file://{}", path.display());
+                    blocks.push(acp_image_resource_block(&uri, &mime, &data));
                 }
                 Err(err) => {
                     tracing::warn!(
@@ -691,7 +688,7 @@ fn user_input_to_acp_prompt(input: &[p::UserInput]) -> Vec<Value> {
                         "failed to read local image; sending resource_link"
                     );
                     let uri = format!("file://{}", path.display());
-                    blocks.push(json!({"type": "resource_link", "uri": uri}));
+                    blocks.push(acp_resource_link_block(&uri, &image_name_from_uri(&uri)));
                 }
             },
             p::UserInput::Skill { name, .. } => {
@@ -704,7 +701,7 @@ fn user_input_to_acp_prompt(input: &[p::UserInput]) -> Vec<Value> {
                 } else {
                     format!("file://{path}")
                 };
-                blocks.push(json!({"type": "resource_link", "uri": uri}));
+                blocks.push(acp_resource_link_block(&uri, name));
             }
         }
     }
@@ -712,6 +709,68 @@ fn user_input_to_acp_prompt(input: &[p::UserInput]) -> Vec<Value> {
         blocks.push(json!({"type": "text", "text": ""}));
     }
     blocks
+}
+
+fn acp_image_url_block(url: &str) -> Value {
+    if let Some((mime, data)) = parse_image_data_url(url) {
+        return acp_image_resource_block("litter://input-image", &mime, &data);
+    }
+    acp_resource_link_block(url, &image_name_from_uri(url))
+}
+
+fn acp_image_resource_block(uri: &str, mime: &str, data: &str) -> Value {
+    json!({
+        "type": "resource",
+        "resource": {
+            "uri": uri,
+            "blob": data,
+            "mimeType": mime,
+        },
+    })
+}
+
+fn acp_resource_link_block(uri: &str, name: &str) -> Value {
+    json!({
+        "type": "resource_link",
+        "uri": uri,
+        "name": name,
+    })
+}
+
+fn parse_image_data_url(url: &str) -> Option<(String, String)> {
+    let source = url.strip_prefix("data:")?;
+    let (metadata, data) = source.split_once(',')?;
+    if data.is_empty() {
+        return None;
+    }
+    let mut metadata_parts = metadata.split(';');
+    let mime = metadata_parts.next().unwrap_or("image/png");
+    if !mime.starts_with("image/") {
+        return None;
+    }
+    if !metadata_parts.any(|part| part.eq_ignore_ascii_case("base64")) {
+        return None;
+    }
+    Some((mime.to_string(), data.to_string()))
+}
+
+fn image_name_from_uri(uri: &str) -> String {
+    let without_fragment = uri.split('#').next().unwrap_or(uri);
+    let without_query = without_fragment
+        .split('?')
+        .next()
+        .unwrap_or(without_fragment);
+    let name = without_query
+        .trim_end_matches('/')
+        .rsplit(|ch| ch == '/' || ch == '\\')
+        .next()
+        .unwrap_or("")
+        .trim();
+    if name.is_empty() {
+        "image".to_string()
+    } else {
+        name.to_string()
+    }
 }
 
 /// One-line text summary of UserInput[] used for the codex
@@ -1286,32 +1345,31 @@ pub async fn handle_turn_start(
     }))
 }
 
-/// Handle command/exec request.
+/// Handle one buffered host command for app-server utility flows.
 ///
-/// codex `CommandExecParams` doesn't include a `threadId` field, so the
-/// bridge has no way to know which ACP session a shell command should
-/// run against (and ACP `terminal/*` methods require a session id). The
-/// previous implementation hard-coded `"default"`, hit "Session not
-/// found" on every call, then mapped that to a confusing
-/// METHOD_NOT_FOUND with a misleading "agent doesn't support terminal
-/// operations" message.
-///
-/// Surface a clear METHOD_NOT_FOUND up front. iOS shouldn't be calling
-/// command/exec on ACP threads anyway — tool execution from the agent
-/// flows through `session/update` → `tool_call`, which the translator
-/// already renders as `commandExecution` ThreadItems.
+/// ACP agent tool executions still arrive through `session/update` events;
+/// this path is for client-side utilities such as remote directory browsing.
 pub async fn handle_command_exec(
     _ctx: &alleycat_bridge_core::Conn,
-    _bridge: &crate::bridge::AcpBridge,
+    bridge: &crate::bridge::AcpBridge,
     _client: &Arc<AcpClient>,
-    _params: Value,
+    params: Value,
 ) -> Result<Value, JsonRpcError> {
-    Err(JsonRpcError {
-        code: error_codes::METHOD_NOT_FOUND,
-        message:
-            "command/exec is not supported by ACP bridges (no threadId in CommandExecParams). \
-                  Agent-initiated commands flow through session/update tool_call events instead."
-                .to_string(),
+    let typed: p::CommandExecParams = serde_json::from_value(params).map_err(|e| JsonRpcError {
+        code: error_codes::INVALID_PARAMS,
+        message: format!("Invalid CommandExecParams: {}", e),
+        data: None,
+    })?;
+    let response = crate::command_exec::handle_command_exec(bridge.tool_launcher(), typed)
+        .await
+        .map_err(|err| JsonRpcError {
+            code: err.rpc_code(),
+            message: err.to_string(),
+            data: None,
+        })?;
+    serde_json::to_value(response).map_err(|err| JsonRpcError {
+        code: error_codes::INTERNAL_ERROR,
+        message: format!("serialize command/exec response: {err}"),
         data: None,
     })
 }
@@ -1437,36 +1495,11 @@ pub fn handle_review_start(_params: p::ReviewStartParams) -> Result<Value, JsonR
 
 /// Handle command/exec/terminate request.
 pub async fn handle_command_exec_terminate(
-    client: &Arc<AcpClient>,
+    _client: &Arc<AcpClient>,
     params: p::CommandExecTerminateParams,
 ) -> Result<p::CommandExecTerminateResponse, JsonRpcError> {
-    // The process_id in Codex maps to terminal_id in ACP
-    let session_id = "default".to_string(); // Would need to track session mapping
-    let terminal_id = params.process_id;
-
-    // Try to kill the terminal
-    let kill_request = json!({
-        "sessionId": session_id,
-        "terminalId": terminal_id,
-    });
-
-    match client.send_request("terminal/kill", kill_request).await {
-        Ok(_) => {
-            // Release the terminal after killing
-            let release_request = json!({
-                "sessionId": session_id,
-                "terminalId": terminal_id,
-            });
-            let _ = client
-                .send_request("terminal/release", release_request)
-                .await;
-            Ok(p::CommandExecTerminateResponse {})
-        }
-        Err(_) => {
-            // Terminal doesn't exist or already terminated, that's fine
-            Ok(p::CommandExecTerminateResponse {})
-        }
-    }
+    crate::command_exec::handle_command_exec_terminate(params);
+    Ok(p::CommandExecTerminateResponse {})
 }
 
 /// Handle command/exec/write request.
@@ -1537,3 +1570,55 @@ pub async fn handle_turn_interrupt(
 
 // Note: ACP `session/update` translation lives in `crate::translator`.
 // `handle_turn_start` and `build_turns_from_replay` are the only callers.
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    #[test]
+    fn data_url_image_input_becomes_embedded_resource() {
+        let blocks = user_input_to_acp_prompt(&[p::UserInput::Image {
+            url: "data:image/png;base64,AAA=".to_string(),
+        }]);
+
+        assert_eq!(
+            blocks,
+            vec![json!({
+                "type": "resource",
+                "resource": {
+                    "uri": "litter://input-image",
+                    "blob": "AAA=",
+                    "mimeType": "image/png",
+                },
+            })]
+        );
+    }
+
+    #[test]
+    fn remote_image_input_becomes_named_resource_link() {
+        let blocks = user_input_to_acp_prompt(&[p::UserInput::Image {
+            url: "https://example.test/assets/photo.png?size=small".to_string(),
+        }]);
+
+        assert_eq!(
+            blocks,
+            vec![json!({
+                "type": "resource_link",
+                "uri": "https://example.test/assets/photo.png?size=small",
+                "name": "photo.png",
+            })]
+        );
+    }
+
+    #[test]
+    fn unreadable_local_image_resource_link_has_name() {
+        let blocks = user_input_to_acp_prompt(&[p::UserInput::LocalImage {
+            path: PathBuf::from("missing-image.png"),
+        }]);
+
+        assert_eq!(blocks[0]["type"], "resource_link");
+        assert_eq!(blocks[0]["name"], "missing-image.png");
+    }
+}

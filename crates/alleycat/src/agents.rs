@@ -164,114 +164,166 @@ impl AgentManager {
                 .with_program_aliases(pi_program_aliases());
         let launcher: Arc<dyn ProcessLauncher> = Arc::new(user_launcher);
 
-        let mut pi_builder = PiBridge::builder()
-            .agent_bin(PathBuf::from(&snapshot.agents.pi.bin))
-            .launcher(Arc::clone(&launcher));
-        if let Some(ref home) = codex_home {
-            pi_builder = pi_builder.codex_home(home.clone());
-        }
-        let pi_bridge = pi_builder.build().await.context("building pi bridge")?;
+        let pi_bridge = if snapshot.agents.pi.enabled {
+            let mut pi_builder = PiBridge::builder()
+                .agent_bin(PathBuf::from(&snapshot.agents.pi.bin))
+                .launcher(Arc::clone(&launcher));
+            if let Some(ref home) = codex_home {
+                pi_builder = pi_builder.codex_home(home.clone());
+            }
+            Some(pi_builder.build().await.context("building pi bridge")?)
+        } else {
+            None
+        };
 
-        let mut amp_builder = AmpBridge::builder()
-            .agent_bin(PathBuf::from(&snapshot.agents.amp.bin))
-            .launcher(Arc::clone(&launcher))
-            .dangerously_allow_all(snapshot.agents.amp.dangerously_allow_all);
-        if let Some(ref home) = codex_home {
-            amp_builder = amp_builder.codex_home(home.clone());
-        }
-        let amp_bridge = amp_builder.build().await.context("building amp bridge")?;
+        let amp_bridge = if snapshot.agents.amp.enabled {
+            let mut amp_builder = AmpBridge::builder()
+                .agent_bin(PathBuf::from(&snapshot.agents.amp.bin))
+                .launcher(Arc::clone(&launcher))
+                .dangerously_allow_all(snapshot.agents.amp.dangerously_allow_all);
+            if let Some(ref home) = codex_home {
+                amp_builder = amp_builder.codex_home(home.clone());
+            }
+            Some(amp_builder.build().await.context("building amp bridge")?)
+        } else {
+            None
+        };
 
-        let mut claude_builder = ClaudeBridge::builder()
-            .agent_bin(PathBuf::from(&snapshot.agents.claude.bin))
-            .launcher(Arc::clone(&launcher))
-            .bypass_permissions(snapshot.agents.claude.bypass_permissions);
-        if let Some(ref home) = codex_home {
-            claude_builder = claude_builder.codex_home(home.clone());
-        }
-        let claude_bridge = claude_builder
-            .build()
-            .await
-            .context("building claude bridge")?;
+        let claude_bridge = if snapshot.agents.claude.enabled {
+            let mut claude_builder = ClaudeBridge::builder()
+                .agent_bin(PathBuf::from(&snapshot.agents.claude.bin))
+                .launcher(Arc::clone(&launcher))
+                .bypass_permissions(snapshot.agents.claude.bypass_permissions);
+            if let Some(ref home) = codex_home {
+                claude_builder = claude_builder.codex_home(home.clone());
+            }
+            Some(
+                claude_builder
+                    .build()
+                    .await
+                    .context("building claude bridge")?,
+            )
+        } else {
+            None
+        };
 
-        let mut droid_builder = DroidBridge::builder()
-            .agent_bin(PathBuf::from(&snapshot.agents.droid.bin))
-            .launcher(Arc::clone(&launcher));
-        if let Some(ref home) = codex_home {
-            droid_builder = droid_builder.codex_home(home.clone());
-        }
-        let droid_bridge = droid_builder
-            .build()
-            .await
-            .context("building droid bridge")?;
+        let droid_bridge = if snapshot.agents.droid.enabled {
+            let mut droid_builder = DroidBridge::builder()
+                .agent_bin(PathBuf::from(&snapshot.agents.droid.bin))
+                .launcher(Arc::clone(&launcher));
+            if let Some(ref home) = codex_home {
+                droid_builder = droid_builder.codex_home(home.clone());
+            }
+            Some(
+                droid_builder
+                    .build()
+                    .await
+                    .context("building droid bridge")?,
+            )
+        } else {
+            None
+        };
 
-        let devin_builder = AcpBridge::builder()
-            .agent_bin(PathBuf::from(&snapshot.agents.devin.bin))
-            .launcher(Arc::clone(&launcher));
-        let devin_acp = devin_builder
-            .build()
-            .await
-            .context("building devin bridge")?;
-        // Wrap the generic ACP bridge so `thread/list` reads devin's local
-        // SQLite store directly; ACP `session/list` filters out
-        // untitled/low-activity sessions and the mobile UI wants everything.
-        let devin_bridge: Arc<dyn Bridge> =
-            Arc::new(DevinBridge::with_default_db(devin_acp).context("wiring devin bridge")?);
+        let devin_bridge = if snapshot.agents.devin.enabled {
+            let devin_builder = AcpBridge::builder()
+                .agent_bin(PathBuf::from(&snapshot.agents.devin.bin))
+                .launcher(Arc::clone(&launcher));
+            let devin_acp = devin_builder
+                .build()
+                .await
+                .context("building devin bridge")?;
+            Some(
+                Arc::new(DevinBridge::with_default_db(devin_acp).context("wiring devin bridge")?)
+                    as Arc<dyn Bridge>,
+            )
+        } else {
+            None
+        };
 
-        // Grok is another ACP agent; launch via `grok agent stdio`
-        // (note: unlike Devin we do not assume a sessions.db for thread/list).
-        // All Grok launch knowledge lives in `grok-bridge`.
-        // The daemon and acp-bridge stay unaware of "agent", "stdio", etc.
-        let grok_bridge = GrokBridge::build(
-            PathBuf::from(&snapshot.agents.grok.bin),
-            snapshot.agents.grok.no_leader,
-            snapshot.agents.grok.model.clone(),
-            snapshot.agents.grok.always_approve,
-            snapshot.agents.grok.reasoning_effort.clone(),
-            Arc::clone(&launcher),
-        )
-        .await
-        .context("building grok bridge")?;
+        let grok_bridge = if snapshot.agents.grok.enabled {
+            Some(
+                GrokBridge::build(
+                    PathBuf::from(&snapshot.agents.grok.bin),
+                    snapshot.agents.grok.no_leader,
+                    snapshot.agents.grok.model.clone(),
+                    snapshot.agents.grok.always_approve,
+                    snapshot.agents.grok.reasoning_effort.clone(),
+                    Arc::clone(&launcher),
+                )
+                .await
+                .context("building grok bridge")?,
+            )
+        } else {
+            None
+        };
 
-        let necode_bridge = AcpBridge::builder()
-            .agent_bin(PathBuf::from(&snapshot.agents.necode.bin))
-            .launcher(Arc::clone(&launcher))
-            .build()
-            .await
-            .context("building necode bridge")?;
+        let necode_bridge = if snapshot.agents.necode.enabled {
+            Some(
+                AcpBridge::builder()
+                    .agent_bin(PathBuf::from(&snapshot.agents.necode.bin))
+                    .launcher(Arc::clone(&launcher))
+                    .build()
+                    .await
+                    .context("building necode bridge")?,
+            )
+        } else {
+            None
+        };
 
-        let shell_cfg = &snapshot.agents.shell;
-        let mut shell_builder = ShellBridge::builder()
-            .shell_bin(shell_cfg.shell_bin.clone())
-            .allow_env_passthrough(shell_cfg.allow_env_passthrough);
-        if let Some(default_cwd) = shell_cfg.default_cwd.as_ref() {
-            shell_builder = shell_builder.default_cwd(default_cwd);
-        }
-        let shell_bridge = shell_builder.build();
+        let shell_bridge = if snapshot.agents.shell.enabled {
+            let shell_cfg = &snapshot.agents.shell;
+            let mut shell_builder = ShellBridge::builder()
+                .shell_bin(shell_cfg.shell_bin.clone())
+                .allow_env_passthrough(shell_cfg.allow_env_passthrough);
+            if let Some(default_cwd) = shell_cfg.default_cwd.as_ref() {
+                shell_builder = shell_builder.default_cwd(default_cwd);
+            }
+            Some(shell_builder.build())
+        } else {
+            None
+        };
 
         let mut bridges: HashMap<AgentKind, Arc<dyn Bridge>> = HashMap::new();
-        bridges.insert(AgentKind::Pi, pi_bridge as Arc<dyn Bridge>);
-        bridges.insert(AgentKind::Amp, amp_bridge as Arc<dyn Bridge>);
-        bridges.insert(AgentKind::Claude, claude_bridge as Arc<dyn Bridge>);
-        bridges.insert(AgentKind::Droid, droid_bridge as Arc<dyn Bridge>);
-        bridges.insert(AgentKind::Devin, devin_bridge);
-        bridges.insert(AgentKind::Grok, grok_bridge);
-        bridges.insert(AgentKind::Necode, necode_bridge);
-        bridges.insert(AgentKind::Shell, shell_bridge);
-
-        let hermes_cfg = &snapshot.agents.hermes;
-        let hermes_bridge_cfg = HermesBridgeConfig {
-            mode: alleycat_hermes_bridge::HermesMode::Auto {
-                api_base: hermes_cfg.api_base.clone(),
-                bin: Some(hermes_cfg.bin.clone()),
-            },
-            state_dir: codex_home
-                .as_ref()
-                .map(|p| p.join("hermes-bridge").to_string_lossy().to_string()),
-        };
-        bridges.insert(
-            AgentKind::Hermes,
-            Arc::new(HermesBridge::new(hermes_bridge_cfg)) as Arc<dyn Bridge>,
-        );
+        if let Some(pi_bridge) = pi_bridge {
+            bridges.insert(AgentKind::Pi, pi_bridge as Arc<dyn Bridge>);
+        }
+        if let Some(amp_bridge) = amp_bridge {
+            bridges.insert(AgentKind::Amp, amp_bridge as Arc<dyn Bridge>);
+        }
+        if let Some(claude_bridge) = claude_bridge {
+            bridges.insert(AgentKind::Claude, claude_bridge as Arc<dyn Bridge>);
+        }
+        if let Some(droid_bridge) = droid_bridge {
+            bridges.insert(AgentKind::Droid, droid_bridge as Arc<dyn Bridge>);
+        }
+        if let Some(devin_bridge) = devin_bridge {
+            bridges.insert(AgentKind::Devin, devin_bridge);
+        }
+        if let Some(grok_bridge) = grok_bridge {
+            bridges.insert(AgentKind::Grok, grok_bridge);
+        }
+        if let Some(necode_bridge) = necode_bridge {
+            bridges.insert(AgentKind::Necode, necode_bridge);
+        }
+        if let Some(shell_bridge) = shell_bridge {
+            bridges.insert(AgentKind::Shell, shell_bridge);
+        }
+        if snapshot.agents.hermes.enabled {
+            let hermes_cfg = &snapshot.agents.hermes;
+            let hermes_bridge_cfg = HermesBridgeConfig {
+                mode: alleycat_hermes_bridge::HermesMode::Auto {
+                    api_base: hermes_cfg.api_base.clone(),
+                    bin: Some(hermes_cfg.bin.clone()),
+                },
+                state_dir: codex_home
+                    .as_ref()
+                    .map(|p| p.join("hermes-bridge").to_string_lossy().to_string()),
+            };
+            bridges.insert(
+                AgentKind::Hermes,
+                Arc::new(HermesBridge::new(hermes_bridge_cfg)) as Arc<dyn Bridge>,
+            );
+        }
 
         let session_cfg = &snapshot.session;
         let registry_config = SessionRegistryConfig {

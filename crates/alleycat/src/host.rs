@@ -34,10 +34,17 @@ pub async fn bind_endpoint(secret_key: SecretKey, relay: Option<&str>) -> anyhow
         .max_idle_timeout(Some(idle_timeout))
         .build();
 
-    let mut builder = Endpoint::builder(presets::N0)
-        .secret_key(secret_key)
-        .alpns(vec![ALLEYCAT_ALPN.to_vec()])
-        .transport_config(transport);
+    // A pinned relay makes the QR payload self-contained: clients dial
+    // node_id + relay directly, so N0's PKARR/DNS address publishing is
+    // unnecessary and can spam warnings on networks that block dns.iroh.link.
+    let mut builder = if relay.is_some() {
+        Endpoint::builder(presets::Minimal)
+    } else {
+        Endpoint::builder(presets::N0)
+    }
+    .secret_key(secret_key)
+    .alpns(vec![ALLEYCAT_ALPN.to_vec()])
+    .transport_config(transport);
     if let Some(relay_mode) = relay_mode_from_config(relay)? {
         builder = builder.relay_mode(relay_mode);
     }

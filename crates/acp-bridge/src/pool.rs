@@ -62,6 +62,10 @@ impl AcpPool {
         }
     }
 
+    pub(crate) fn launcher(&self) -> Arc<dyn ProcessLauncher> {
+        Arc::clone(&self.launcher)
+    }
+
     /// Get or create an ACP client for the given session.
     #[instrument(skip(self), fields(session_id = %session_id))]
     pub async fn get_client(&self, session_id: &str) -> Result<Arc<AcpClient>> {

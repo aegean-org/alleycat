@@ -2,6 +2,7 @@
 
 pub mod acp_client;
 pub mod bridge;
+pub(crate) mod command_exec;
 pub mod config;
 pub mod handlers;
 pub mod persistence;

@@ -159,6 +159,10 @@ impl AcpBridge {
         self.pool.get_client(session_key).await
     }
 
+    pub(crate) fn tool_launcher(&self) -> Arc<dyn ProcessLauncher> {
+        self.pool.launcher()
+    }
+
     /// Append a fully-assembled turn to a thread's history. The bridge
     /// expects callers to construct the entire `StoredTurn` before
     /// handing it in — translation from ACP `session/update` →
