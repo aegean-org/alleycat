@@ -24,7 +24,30 @@ fn coerce_absolute_cwd(cwd: Option<&str>) -> &str {
 }
 
 fn is_absolute_cwd(path: &str) -> bool {
-    Path::new(path).is_absolute() || path.starts_with('/')
+    Path::new(path).is_absolute() || path.starts_with('/') || is_windows_absolute_cwd(path)
+}
+
+fn is_windows_absolute_cwd(path: &str) -> bool {
+    let mut chars = path.chars();
+    matches!(
+        (chars.next(), chars.next(), chars.next()),
+        (Some(drive), Some(':'), Some('\\' | '/')) if drive.is_ascii_alphabetic()
+    ) || path.starts_with(r"\\")
+}
+
+fn resolve_thread_resume_cwd(provided: Option<&str>, cached: Option<String>) -> String {
+    if let Some(cwd) = provided.and_then(valid_absolute_cwd) {
+        return cwd.to_string();
+    }
+    if let Some(cwd) = cached.as_deref().and_then(valid_absolute_cwd) {
+        return cwd.to_string();
+    }
+    "/".to_string()
+}
+
+fn valid_absolute_cwd(path: &str) -> Option<&str> {
+    let trimmed = path.trim();
+    is_absolute_cwd(trimmed).then_some(trimmed)
 }
 
 /// Handle initialize request.
@@ -382,6 +405,7 @@ pub async fn handle_thread_start(
     // sandbox. Building the same shape we use in resume keeps the iOS
     // deserializer happy.
     let cwd = typed.cwd.clone().unwrap_or_default();
+    bridge.set_thread_cwd(&session_id, &cwd);
     let now_ms = chrono::Utc::now().timestamp_millis();
     let cached_title = bridge.get_thread_title(&session_id);
     Ok(json!({
@@ -413,6 +437,7 @@ pub async fn handle_thread_start(
 
 /// Handle thread/list request.
 pub async fn handle_thread_list(
+    bridge: &crate::bridge::AcpBridge,
     agent_id: &str,
     client: &Arc<AcpClient>,
     _params: p::ThreadListParams,
@@ -438,6 +463,12 @@ pub async fn handle_thread_list(
                         .to_string();
                     let created_at = timestamp_ms(session.get("createdAt"));
                     let updated_at = timestamp_ms(session.get("updatedAt"));
+                    let cwd = session
+                        .get("cwd")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    bridge.set_thread_cwd(session_id, &cwd);
 
                     Some(json!({
                         "id": session_id,
@@ -450,7 +481,7 @@ pub async fn handle_thread_list(
                         "updatedAt": updated_at,
                         "status": { "type": "idle" },
                         "path": "",
-                        "cwd": "",
+                        "cwd": cwd,
                         "cliVersion": "",
                         "source": "appServer",
                         "threadSource": null,
@@ -518,13 +549,15 @@ pub async fn handle_thread_resume(
     // ACP spec method is `session/load`, not `session/resume`. The agent
     // advertises this via `agentCapabilities.loadSession: true`. `mcpServers`
     // is required by ACP even when empty. `cwd` is also required as a
-    // string; mobile clients often call thread/resume without knowing the
-    // session's original cwd. Devin's serde tolerates `""`, but grok
-    // rejects relative paths with `-32602 Invalid params: Path is not
-    // absolute: `, so fall back to `/` when the client didn't supply one.
+    // string, but mobile clients often resume by thread id only; use the
+    // cwd cached from `session/list` / `thread/start` before falling back.
+    let cwd = resolve_thread_resume_cwd(
+        typed.cwd.as_deref(),
+        bridge.get_thread_cwd(&typed.thread_id),
+    );
     let acp_request = json!({
-        "sessionId": typed.thread_id,
-        "cwd": coerce_absolute_cwd(typed.cwd.as_deref()),
+        "sessionId": &typed.thread_id,
+        "cwd": &cwd,
         "mcpServers": [],
     });
 
@@ -551,6 +584,7 @@ pub async fn handle_thread_resume(
     if let Some(mode) = extract_current_mode(&acp_notifications) {
         bridge.set_current_mode(&typed.thread_id, mode);
     }
+    bridge.set_thread_cwd(&typed.thread_id, &cwd);
 
     // Local turns (captured by handle_turn_start in this daemon run) take
     // priority if present; otherwise rebuild from the ACP replay stream.
@@ -578,7 +612,6 @@ pub async fn handle_thread_resume(
     // modelProvider / cwd / approvalPolicy / approvalsReviewer / sandbox.
     // Missing any one of these makes the iOS deserializer reject the whole
     // resume with `missing field <foo>`.
-    let cwd = typed.cwd.clone().unwrap_or_default();
     let model = typed.model.clone().unwrap_or_else(|| agent_id.clone());
     let model_provider = typed
         .model_provider
@@ -1005,6 +1038,7 @@ pub async fn handle_thread_read(
     // fields the resume/start responses do; missing any one of them
     // makes iOS reject the entire deserialization.
     let cached_title = bridge.get_thread_title(&typed.thread_id);
+    let cwd = bridge.get_thread_cwd(&typed.thread_id).unwrap_or_default();
     Ok(json!({
         "thread": {
             "id": typed.thread_id,
@@ -1016,7 +1050,7 @@ pub async fn handle_thread_read(
             "createdAt": created_at_ms,
             "updatedAt": updated_at_ms,
             "status": { "type": "idle" },
-            "cwd": "",
+            "cwd": cwd,
             "cliVersion": "",
             "source": "appServer",
             "agentNickname": null,
@@ -1377,6 +1411,7 @@ pub async fn handle_command_exec(
 /// Handle thread/fork request.
 pub async fn handle_thread_fork(
     ctx: &alleycat_bridge_core::Conn,
+    bridge: &crate::bridge::AcpBridge,
     client: &Arc<AcpClient>,
     params: Value,
 ) -> Result<Value, JsonRpcError> {
@@ -1411,6 +1446,7 @@ pub async fn handle_thread_fork(
         .and_then(|v| v.as_str())
         .unwrap_or("unknown")
         .to_string();
+    bridge.set_thread_cwd(&new_session_id, &cwd);
 
     let now_ms = chrono::Utc::now().timestamp_millis();
     let model = typed.model.clone().unwrap_or_else(|| agent_id.clone());
@@ -1620,5 +1656,22 @@ mod tests {
 
         assert_eq!(blocks[0]["type"], "resource_link");
         assert_eq!(blocks[0]["name"], "missing-image.png");
+    }
+
+    #[test]
+    fn resume_cwd_uses_cached_value_when_request_omits_cwd() {
+        let cwd = resolve_thread_resume_cwd(None, Some(r"D:\project\qt-note".to_string()));
+
+        assert_eq!(cwd, r"D:\project\qt-note");
+    }
+
+    #[test]
+    fn resume_cwd_prefers_request_value_over_cache() {
+        let cwd = resolve_thread_resume_cwd(
+            Some(r"D:\project\selected"),
+            Some(r"D:\project\cached".to_string()),
+        );
+
+        assert_eq!(cwd, r"D:\project\selected");
     }
 }

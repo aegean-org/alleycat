@@ -118,6 +118,9 @@ pub struct AcpBridge {
     /// thread names are tracked locally and echoed back via
     /// `thread/name/updated` so iOS's display stays consistent.
     thread_titles: DashMap<String, String>,
+    /// Last known working directory per ACP session id. Mobile clients may
+    /// resume by thread id only; ACP still requires the original cwd.
+    thread_cwds: DashMap<String, String>,
     /// Optional session persistence manager
     persistence: Option<SessionPersistence>,
     /// JoinHandle for the background pool-eviction task so we can abort
@@ -329,6 +332,17 @@ impl AcpBridge {
     /// Fetch the client-set title for a thread, if any.
     pub fn get_thread_title(&self, thread_id: &str) -> Option<String> {
         self.thread_titles.get(thread_id).map(|t| t.clone())
+    }
+
+    pub fn set_thread_cwd(&self, thread_id: &str, cwd: &str) {
+        if !cwd.trim().is_empty() {
+            self.thread_cwds
+                .insert(thread_id.to_string(), cwd.to_string());
+        }
+    }
+
+    pub fn get_thread_cwd(&self, thread_id: &str) -> Option<String> {
+        self.thread_cwds.get(thread_id).map(|cwd| cwd.clone())
     }
 
     /// Union of cached available modes across sessions, deduped by id.
@@ -655,6 +669,7 @@ impl AcpBridgeBuilder {
             models: DashMap::new(),
             modes: DashMap::new(),
             thread_titles: DashMap::new(),
+            thread_cwds: DashMap::new(),
             persistence,
             eviction_handle: std::sync::Mutex::new(Some(eviction_handle)),
         }))
@@ -766,7 +781,7 @@ impl Bridge for AcpBridge {
                 } else {
                     decode(params)?
                 };
-                handlers::handle_thread_list(&ctx.session().agent, &client, typed).await
+                handlers::handle_thread_list(self, &ctx.session().agent, &client, typed).await
             }
             "thread/start" => handlers::handle_thread_start(ctx, self, &client, params).await,
             "thread/resume" => handlers::handle_thread_resume(ctx, self, &client, params).await,
@@ -775,7 +790,7 @@ impl Bridge for AcpBridge {
                 let typed: p::ThreadSetNameParams = decode(params)?;
                 to_value(handlers::handle_thread_name_set(ctx, self, typed))
             }
-            "thread/fork" => handlers::handle_thread_fork(ctx, &client, params).await,
+            "thread/fork" => handlers::handle_thread_fork(ctx, self, &client, params).await,
             "thread/rollback" => {
                 let typed: p::ThreadRollbackParams = decode(params)?;
                 handlers::handle_thread_rollback(typed)
