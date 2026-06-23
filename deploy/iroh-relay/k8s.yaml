@@ -33,7 +33,7 @@ spec:
     spec:
       containers:
         - name: iroh-relay
-          image: registry.example.com/necode/iroh-relay:0.98.0
+          image: ghcr.io/aegean-org/iroh-relay:0.98.0
           imagePullPolicy: IfNotPresent
           args:
             - --config-path

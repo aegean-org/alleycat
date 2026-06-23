@@ -4,18 +4,17 @@ This deploys a single `iroh-relay` instance for Alleycat/Litter pairing.
 
 ## Fill these values
 
-Replace this placeholder in `k8s.yaml`:
-
-- `registry.example.com/necode/iroh-relay:0.98.0`: image pushed to your registry.
-
 The public DNS name must point to the HAProxy/Ingress entrypoint.
 
 ## Build and push the image
 
 ```powershell
-docker build -t registry.example.com/necode/iroh-relay:0.98.0 D:\project\alleycat\deploy\iroh-relay
-docker push registry.example.com/necode/iroh-relay:0.98.0
+docker build -t ghcr.io/aegean-org/iroh-relay:0.98.0 D:\project\alleycat\deploy\iroh-relay
+docker push ghcr.io/aegean-org/iroh-relay:0.98.0
 ```
+
+The repository also includes `.github/workflows/iroh-relay-image.yml`, which
+pushes the same image to GHCR on demand or when relay deployment files change.
 
 ## Deploy
 
