@@ -1216,15 +1216,20 @@ pub async fn handle_turn_start(
         })
         .await
         .map_err(|e| {
+            let details = e.to_string();
+            let warning = format!("Failed to send session/prompt to ACP agent: {details}");
             bridge.emit_thread_warning(
                 ctx,
                 &typed.thread_id,
-                &format!("Failed to send session/prompt to ACP agent: {}", e),
+                &warning,
             );
             JsonRpcError {
                 code: error_codes::INTERNAL_ERROR,
-                message: format!("Failed to send session/prompt to ACP agent: {}", e),
-                data: None,
+                message: details.clone(),
+                data: Some(json!({
+                    "operation": "session/prompt",
+                    "details": details,
+                })),
             }
         })?;
 

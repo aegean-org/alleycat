@@ -294,12 +294,10 @@ impl AcpClient {
 
         if let Some(error) = response.get("error") {
             error!(?error, "ACP agent returned error");
-            // Surface just the human-readable `message` so callers (and
-            // ultimately the iOS error toast) see a clean line.
-            let message = error
-                .get("message")
-                .and_then(|v| v.as_str())
-                .unwrap_or("ACP agent returned an error");
+            // Surface the most actionable line. Some ACP agents put the real
+            // cause under `data.details` while leaving `message` as the generic
+            // JSON-RPC "Internal error".
+            let message = acp_error_message(error);
             anyhow::bail!("{message}");
         }
 
@@ -335,6 +333,65 @@ impl AcpClient {
             .kill()
             .await
             .map_err(|e| anyhow::anyhow!("Failed to kill process: {}", e))
+    }
+}
+
+fn acp_error_message(error: &Value) -> String {
+    let message = error
+        .get("message")
+        .and_then(|v| v.as_str())
+        .filter(|text| !text.trim().is_empty())
+        .unwrap_or("ACP agent returned an error");
+    let details = error
+        .get("data")
+        .and_then(|data| data.get("details").or_else(|| data.get("message")))
+        .and_then(|v| v.as_str())
+        .filter(|text| !text.trim().is_empty());
+
+    match details {
+        Some(details) if message == "Internal error" => details.to_string(),
+        Some(details) if details == message => message.to_string(),
+        Some(details) => format!("{message}: {details}"),
+        None => message.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::acp_error_message;
+
+    #[test]
+    fn acp_error_message_prefers_details_for_generic_internal_error() {
+        let error = json!({
+            "code": -32603,
+            "message": "Internal error",
+            "data": {
+                "details": "NE login required. Use /login to continue."
+            }
+        });
+
+        assert_eq!(
+            acp_error_message(&error),
+            "NE login required. Use /login to continue."
+        );
+    }
+
+    #[test]
+    fn acp_error_message_appends_distinct_details() {
+        let error = json!({
+            "code": -32602,
+            "message": "Invalid params",
+            "data": {
+                "details": "sessionId is missing"
+            }
+        });
+
+        assert_eq!(
+            acp_error_message(&error),
+            "Invalid params: sessionId is missing"
+        );
     }
 }
 
