@@ -406,6 +406,7 @@ pub async fn handle_thread_start(
     // deserializer happy.
     let cwd = typed.cwd.clone().unwrap_or_default();
     bridge.set_thread_cwd(&session_id, &cwd);
+    bridge.mark_session_loaded(&session_id);
     let now_ms = chrono::Utc::now().timestamp_millis();
     let cached_title = bridge.get_thread_title(&session_id);
     Ok(json!({
@@ -574,30 +575,10 @@ pub async fn handle_thread_resume(
             data: None,
         })?;
 
-    // session/load also streams `available_commands_update` ahead of the
-    // response — cache whatever the agent sends so `skills/list` returns
-    // a real list even before the first turn is sent.
     let acp_notifications = client.take_pending_notifications().await;
-    if let Some(cmds) = extract_available_commands(&acp_notifications) {
-        bridge.set_available_commands(&typed.thread_id, cmds);
-    }
-    if let Some(mode) = extract_current_mode(&acp_notifications) {
-        bridge.set_current_mode(&typed.thread_id, mode);
-    }
-    bridge.set_thread_cwd(&typed.thread_id, &cwd);
-
-    // Local turns (captured by handle_turn_start in this daemon run) take
-    // priority if present; otherwise rebuild from the ACP replay stream.
-    let local_turns = bridge.get_turns(&typed.thread_id);
-    let stored_turns: Vec<crate::bridge::StoredTurn> = if !local_turns.is_empty() {
-        local_turns
-    } else {
-        let rebuilt = build_turns_from_replay(&acp_notifications);
-        if !rebuilt.is_empty() {
-            bridge.set_turns(&typed.thread_id, rebuilt.clone());
-        }
-        rebuilt
-    };
+    bridge.mark_session_loaded(&typed.thread_id);
+    let stored_turns =
+        apply_session_load_notifications(bridge, &typed.thread_id, &cwd, acp_notifications);
 
     let turns_json: Vec<Value> = stored_turns
         .iter()
@@ -643,6 +624,100 @@ pub async fn handle_thread_resume(
         "approvalsReviewer": "user",
         "sandbox": { "type": "workspaceWrite" },
     }))
+}
+
+async fn ensure_acp_session_loaded(
+    bridge: &crate::bridge::AcpBridge,
+    client: &Arc<AcpClient>,
+    thread_id: &str,
+    requested_cwd: Option<&str>,
+) -> Result<(), JsonRpcError> {
+    if bridge.is_session_loaded(thread_id) {
+        return Ok(());
+    }
+    load_acp_session(bridge, client, thread_id, requested_cwd).await
+}
+
+async fn load_acp_session(
+    bridge: &crate::bridge::AcpBridge,
+    client: &Arc<AcpClient>,
+    thread_id: &str,
+    requested_cwd: Option<&str>,
+) -> Result<(), JsonRpcError> {
+    let cwd = resolve_thread_resume_cwd(requested_cwd, bridge.get_thread_cwd(thread_id));
+    let acp_request = json!({
+        "sessionId": thread_id,
+        "cwd": &cwd,
+        "mcpServers": [],
+    });
+    client
+        .send_request("session/load", acp_request)
+        .await
+        .map_err(|e| {
+            let details = e.to_string();
+            JsonRpcError {
+                code: error_codes::INTERNAL_ERROR,
+                message: details.clone(),
+                data: Some(json!({
+                    "operation": "session/load",
+                    "details": details,
+                })),
+            }
+        })?;
+    let acp_notifications = client.take_pending_notifications().await;
+    bridge.mark_session_loaded(thread_id);
+    apply_session_load_notifications(bridge, thread_id, &cwd, acp_notifications);
+    Ok(())
+}
+
+fn apply_session_load_notifications(
+    bridge: &crate::bridge::AcpBridge,
+    thread_id: &str,
+    cwd: &str,
+    acp_notifications: Vec<Value>,
+) -> Vec<crate::bridge::StoredTurn> {
+    if let Some(cmds) = extract_available_commands(&acp_notifications) {
+        bridge.set_available_commands(thread_id, cmds);
+    }
+    if let Some(mode) = extract_current_mode(&acp_notifications) {
+        bridge.set_current_mode(thread_id, mode);
+    }
+    bridge.set_thread_cwd(thread_id, cwd);
+
+    let local_turns = bridge.get_turns(thread_id);
+    if !local_turns.is_empty() {
+        return local_turns;
+    }
+
+    let rebuilt = build_turns_from_replay(&acp_notifications);
+    if !rebuilt.is_empty() {
+        bridge.set_turns(thread_id, rebuilt.clone());
+    }
+    rebuilt
+}
+
+fn is_acp_session_unavailable_error(error: &anyhow::Error) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    message.contains("unsupported acp session") || message.contains("acp session not found")
+}
+
+fn prompt_rpc_error(
+    ctx: &alleycat_bridge_core::Conn,
+    bridge: &crate::bridge::AcpBridge,
+    thread_id: &str,
+    error: anyhow::Error,
+) -> JsonRpcError {
+    let details = error.to_string();
+    let warning = format!("Failed to send session/prompt to ACP agent: {details}");
+    bridge.emit_thread_warning(ctx, thread_id, &warning);
+    JsonRpcError {
+        code: error_codes::INTERNAL_ERROR,
+        message: details.clone(),
+        data: Some(json!({
+            "operation": "session/prompt",
+            "details": details,
+        })),
+    }
 }
 
 /// Convert a `StoredTurn` into a codex `Turn` JSON object.
@@ -1109,6 +1184,11 @@ pub async fn handle_turn_start(
 
     tracing::Span::current().record("thread_id", &typed.thread_id);
     info!("Starting turn for thread: {}", typed.thread_id);
+    let requested_cwd = typed
+        .cwd
+        .as_ref()
+        .map(|cwd| cwd.to_string_lossy().to_string());
+    ensure_acp_session_loaded(bridge, client, &typed.thread_id, requested_cwd.as_deref()).await?;
 
     // Build ACP ContentBlock array from codex UserInput[]. Honors Text,
     // Image url, LocalImage on-disk path, Skill (translated to a slash
@@ -1208,30 +1288,37 @@ pub async fn handle_turn_start(
     ));
     let emitter_cb = std::sync::Arc::clone(&emitter);
 
-    let acp_response = client
-        .send_request_streaming("session/prompt", acp_request, move |note| {
+    let prompt_result = client
+        .send_request_streaming("session/prompt", acp_request.clone(), move |note| {
             if let Ok(mut e) = emitter_cb.lock() {
                 e.ingest(&note);
             }
         })
-        .await
-        .map_err(|e| {
-            let details = e.to_string();
-            let warning = format!("Failed to send session/prompt to ACP agent: {details}");
-            bridge.emit_thread_warning(
-                ctx,
-                &typed.thread_id,
-                &warning,
+        .await;
+
+    let acp_response = match prompt_result {
+        Ok(response) => response,
+        Err(err) if is_acp_session_unavailable_error(&err) => {
+            tracing::info!(
+                thread_id = %typed.thread_id,
+                "ACP session unavailable during prompt; loading session and retrying once"
             );
-            JsonRpcError {
-                code: error_codes::INTERNAL_ERROR,
-                message: details.clone(),
-                data: Some(json!({
-                    "operation": "session/prompt",
-                    "details": details,
-                })),
-            }
-        })?;
+            bridge.mark_session_unloaded(&typed.thread_id);
+            load_acp_session(bridge, client, &typed.thread_id, requested_cwd.as_deref()).await?;
+            let emitter_cb = std::sync::Arc::clone(&emitter);
+            client
+                .send_request_streaming("session/prompt", acp_request, move |note| {
+                    if let Ok(mut e) = emitter_cb.lock() {
+                        e.ingest(&note);
+                    }
+                })
+                .await
+                .map_err(|e| prompt_rpc_error(ctx, bridge, &typed.thread_id, e))?
+        }
+        Err(err) => {
+            return Err(prompt_rpc_error(ctx, bridge, &typed.thread_id, err));
+        }
+    };
 
     // Discard any notifications still in the fallback buffer — the
     // streaming subscriber already processed them.
@@ -1452,6 +1539,7 @@ pub async fn handle_thread_fork(
         .unwrap_or("unknown")
         .to_string();
     bridge.set_thread_cwd(&new_session_id, &cwd);
+    bridge.mark_session_loaded(&new_session_id);
 
     let now_ms = chrono::Utc::now().timestamp_millis();
     let model = typed.model.clone().unwrap_or_else(|| agent_id.clone());

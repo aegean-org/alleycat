@@ -171,7 +171,13 @@ impl AgentManager {
             if let Some(ref home) = codex_home {
                 pi_builder = pi_builder.codex_home(home.clone());
             }
-            Some(pi_builder.build().await.context("building pi bridge")?)
+            match pi_builder.build().await.context("building pi bridge") {
+                Ok(bridge) => Some(bridge),
+                Err(err) => {
+                    warn!(error = %format!("{err:#}"), "pi bridge unavailable after startup failure");
+                    None
+                }
+            }
         } else {
             None
         };
@@ -214,12 +220,13 @@ impl AgentManager {
             if let Some(ref home) = codex_home {
                 droid_builder = droid_builder.codex_home(home.clone());
             }
-            Some(
-                droid_builder
-                    .build()
-                    .await
-                    .context("building droid bridge")?,
-            )
+            match droid_builder.build().await.context("building droid bridge") {
+                Ok(bridge) => Some(bridge),
+                Err(err) => {
+                    warn!(error = %format!("{err:#}"), "droid bridge unavailable after startup failure");
+                    None
+                }
+            }
         } else {
             None
         };
@@ -1006,7 +1013,9 @@ impl AgentManager {
 
     fn pi_available(&self, env: &LaunchEnvironment) -> bool {
         let cfg = self.config.load();
-        cfg.agents.pi.enabled && resolve_pi_bin(&cfg.agents.pi.bin, env).is_some()
+        self.bridges.contains_key(&AgentKind::Pi)
+            && cfg.agents.pi.enabled
+            && resolve_pi_bin(&cfg.agents.pi.bin, env).is_some()
     }
 
     fn opencode_available(&self, env: &LaunchEnvironment) -> bool {
@@ -1030,7 +1039,8 @@ impl AgentManager {
 
     fn droid_available(&self, env: &LaunchEnvironment) -> bool {
         let cfg = self.config.load();
-        cfg.agents.droid.enabled
+        self.bridges.contains_key(&AgentKind::Droid)
+            && cfg.agents.droid.enabled
             && program_available(env, &cfg.agents.droid.bin)
             && has_factory_auth(&cfg.agents.droid.api_key_env, env)
     }

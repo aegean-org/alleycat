@@ -99,6 +99,10 @@ pub struct AcpBridge {
     turns: DashMap<String, Vec<StoredTurn>>,
     /// Session status per thread ID
     session_status: DashMap<String, SessionStatus>,
+    /// ACP sessions opened or loaded in the current daemon process.
+    /// Daemon restarts keep mobile thread ids but lose child-process ACP
+    /// state, so old threads need `session/load` before `session/prompt`.
+    loaded_sessions: DashMap<String, ()>,
     /// Latest ACP `available_commands_update` payload, keyed by ACP
     /// session id. Served back via `skills/list`. ACP commands tend to
     /// be agent-wide rather than truly per-session, but the spec
@@ -343,6 +347,21 @@ impl AcpBridge {
 
     pub fn get_thread_cwd(&self, thread_id: &str) -> Option<String> {
         self.thread_cwds.get(thread_id).map(|cwd| cwd.clone())
+    }
+
+    /// Mark an ACP session as available in this daemon process.
+    pub fn mark_session_loaded(&self, thread_id: &str) {
+        self.loaded_sessions.insert(thread_id.to_string(), ());
+    }
+
+    /// Mark an ACP session as needing `session/load` before the next prompt.
+    pub fn mark_session_unloaded(&self, thread_id: &str) {
+        self.loaded_sessions.remove(thread_id);
+    }
+
+    /// Return whether this daemon process has opened or loaded the session.
+    pub fn is_session_loaded(&self, thread_id: &str) -> bool {
+        self.loaded_sessions.contains_key(thread_id)
     }
 
     /// Union of cached available modes across sessions, deduped by id.
@@ -665,6 +684,7 @@ impl AcpBridgeBuilder {
             pool,
             turns: DashMap::new(),
             session_status: DashMap::new(),
+            loaded_sessions: DashMap::new(),
             available_commands: DashMap::new(),
             models: DashMap::new(),
             modes: DashMap::new(),
